@@ -1,6 +1,6 @@
 import type { SubwooferSettings, BoxGroup, PhysicalBox, ArrayStats } from './types';
 
-export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set()): { groups: BoxGroup[], stats: ArrayStats } {
+export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set(), disabledCardioidPositions: Set<number> = new Set()): { groups: BoxGroup[], stats: ArrayStats } {
   const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay, stack, cardioidReversedBoxes } = settings;
   const n = count;
   
@@ -72,11 +72,12 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
     }
     
     const isMuted = mutedPositions.has(i);
+    const cardioidDisabled = disabledCardioidPositions.has(i);
     const physicalBoxes: PhysicalBox[] = [];
     const rearPhysicalY = orientation === 'Landscape' ? depth : width;
     
     for (let s = 0; s < stack; s++) {
-      const isRear = cardioid && cardioidReversedBoxes[s] === true;
+      const isRear = cardioid && !cardioidDisabled && cardioidReversedBoxes[s] === true;
       const boxZ = (s * settings.height) + (settings.height / 2); // Ketinggian titik pusat box dari lantai
       const boxY = isRear ? rearPhysicalY : 0; 
       
@@ -98,6 +99,7 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
       virtualY,
       baseDelayMs: delayMs,
       muted: isMuted,
+      cardioidDisabled,
       boxes: physicalBoxes
     });
   }

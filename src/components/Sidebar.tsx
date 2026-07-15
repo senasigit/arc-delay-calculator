@@ -494,6 +494,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
             />
             <input 
               type="date" 
+              title="Tanggal Acara"
               value={reportInfo.date}
               onChange={(e) => onReportInfoChange({...reportInfo, date: e.target.value})}
               className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"

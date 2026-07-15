@@ -16,7 +16,7 @@ export interface SubwooferSettings {
   showHeatmap: boolean;
   cardioid: boolean;
   cardioidDelay: number;
-  cardioidReversedBoxes: boolean[]; // true = reversed/rear, index 0 = bottom box
+  cardioidReversedBoxes: boolean[]; 
 }
 
 export interface PhysicalBox {
@@ -36,6 +36,7 @@ export interface BoxGroup {
   virtualY: number; 
   baseDelayMs: number; 
   muted: boolean;
+  cardioidDisabled: boolean; // Menandakan apakah posisi ini mengabaikan pola cardioid
   boxes: PhysicalBox[];
 }
 

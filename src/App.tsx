@@ -7,13 +7,13 @@ import { calculateArcDelay } from './utils';
 
 function App() {
   const [settings, setSettings] = useState<SubwooferSettings>({
-    count: 6,
+    count: 7, // User want to test 7
     preset: 'Custom',
     orientation: 'Landscape',
     width: 1.15,
     height: 0.55,
     depth: 0.75,
-    stack: 1,
+    stack: 3, // Testing stack 3
     gap: 0.60,
     centralGap: 0.60,
     theta: 90,
@@ -22,9 +22,9 @@ function App() {
     bandwidth: 'Single',
     resolution: 'Medium',
     showHeatmap: true,
-    cardioid: false,
+    cardioid: true, // Auto enable to show feature
     cardioidDelay: 3.4,
-    cardioidReversedBoxes: [false, false, false, false], // Support up to stack 4 initially
+    cardioidReversedBoxes: [false, true, false, false], // Middle box reversed
   });
 
   const [reportInfo, setReportInfo] = useState<ReportInfo>({
@@ -35,6 +35,7 @@ function App() {
   });
 
   const [mutedPositions, setMutedPositions] = useState<Set<number>>(new Set());
+  const [disabledCardioidPositions, setDisabledCardioidPositions] = useState<Set<number>>(new Set());
 
   const handleToggleMute = (positionId: number) => {
     setMutedPositions(prev => {
@@ -45,9 +46,18 @@ function App() {
     });
   };
 
+  const handleToggleCardioid = (positionId: number) => {
+    setDisabledCardioidPositions(prev => {
+      const next = new Set(prev);
+      if (next.has(positionId)) next.delete(positionId);
+      else next.add(positionId);
+      return next;
+    });
+  };
+
   const { groups, stats } = useMemo(() => {
-    return calculateArcDelay(settings, mutedPositions);
-  }, [settings, mutedPositions]);
+    return calculateArcDelay(settings, mutedPositions, disabledCardioidPositions);
+  }, [settings, mutedPositions, disabledCardioidPositions]);
 
   return (
     <div className="flex w-screen h-screen overflow-hidden text-gray-200 bg-[#0a0c10] print:block print:h-auto print:bg-white print:text-black">
@@ -91,7 +101,9 @@ function App() {
           <div className="print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0">
             <DataTable 
               groups={groups} 
+              cardioidEnabled={settings.cardioid}
               onToggleMute={handleToggleMute}
+              onToggleCardioid={handleToggleCardioid}
             />
           </div>
         </div>

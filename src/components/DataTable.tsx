@@ -2,10 +2,12 @@ import type { BoxGroup } from '../types';
 
 interface DataTableProps {
   groups: BoxGroup[];
+  cardioidEnabled: boolean;
   onToggleMute: (positionId: number) => void;
+  onToggleCardioid: (positionId: number) => void;
 }
 
-export function DataTable({ groups, onToggleMute }: DataTableProps) {
+export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardioid }: DataTableProps) {
   
   return (
     <div className="w-80 h-full bg-dark-panel border-l border-dark-border flex flex-col overflow-y-auto">
@@ -23,12 +25,22 @@ export function DataTable({ groups, onToggleMute }: DataTableProps) {
             >
               <div className="flex justify-between items-center mb-2">
                 <span className="font-semibold text-gray-200 print:text-black">{group.label}</span>
-                <button 
-                  onClick={() => onToggleMute(group.positionId)}
-                  className={`text-xs px-2 py-1 rounded font-bold border print:hidden ${group.muted ? 'bg-red-900/50 text-red-400 border-red-800 hover:bg-red-800' : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'}`}
-                >
-                  {group.muted ? 'MUTED' : 'Mute Stack'}
-                </button>
+                <div className="flex space-x-1 print:hidden">
+                  {cardioidEnabled && (
+                    <button 
+                      onClick={() => onToggleCardioid(group.positionId)}
+                      className={`text-[10px] px-1.5 py-1 rounded font-bold border ${group.cardioidDisabled ? 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700' : 'bg-purple-900/50 text-purple-400 border-purple-800 hover:bg-purple-800'}`}
+                    >
+                      {group.cardioidDisabled ? 'C-OFF' : 'C-ON'}
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => onToggleMute(group.positionId)}
+                    className={`text-[10px] px-1.5 py-1 rounded font-bold border ${group.muted ? 'bg-red-900/50 text-red-400 border-red-800 hover:bg-red-800' : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'}`}
+                  >
+                    {group.muted ? 'MUTED' : 'Mute'}
+                  </button>
+                </div>
                 {group.muted && <span className="hidden print:inline text-red-500 font-bold text-xs border border-red-500 px-1 rounded">MUTED</span>}
               </div>
               
