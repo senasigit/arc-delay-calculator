@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SubwooferSettings, BoxCalculation } from '../types';
-import { calculatePolarPattern } from '../utils';
+import { calculate2DSpatialHeatmap, splToColor } from '../utils';
 
 interface VisualizerProps {
   settings: SubwooferSettings;
@@ -21,6 +21,9 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Resolusi blok untuk heatmap (makin kecil makin halus tapi berat)
+    const RESOLUTION = 8; // pixel per block
+
     const resizeCanvas = () => {
       canvas.width = container.clientWidth;
       canvas.height = container.clientHeight;
@@ -31,22 +34,42 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       const { width, height } = canvas;
       ctx.clearRect(0, 0, width, height);
 
-      // Skala (pixels per meter)
-      const arrayLength = (settings.count - 1) * (settings.width + settings.gap) + settings.width;
-      const padding = 50; 
+      // Hitung dimensi total array berdasarkan orientasi
+      const dimension = settings.orientation === 'Landscape' ? settings.width : settings.depth;
+      const physicalDimensionX = settings.orientation === 'Landscape' ? settings.width : settings.depth;
+      const physicalDimensionY = settings.orientation === 'Landscape' ? settings.depth : settings.width;
       
-      // Radius maksimum peta penyebaran yang ingin ditampilkan (misal 20 meter, atau relatif terhadap lebar array)
-      const maxPlotRadius = Math.max(arrayLength * 1.5, 10); // meter
+      const arrayLength = (settings.count - 1) * (dimension + settings.gap) + dimension + (settings.count % 2 === 0 ? settings.centralGap - settings.gap : 0);
       
+      // Radius rendering visual
+      const maxPlotRadius = Math.max(arrayLength * 1.2, 10); // meter
+      
+      const padding = 20; 
       const scaleX = (width - padding * 2) / Math.max(arrayLength, 1);
       const scaleY = (height - padding * 2) / maxPlotRadius;
       const scale = Math.min(scaleX, scaleY, 150); 
       
       const cx = width / 2;
-      const cy = height * 0.8; // Geser ke bawah sedikit agar polar plot punya banyak ruang di atas
+      const cy = height / 2; // Taruh di tengah agar penyebaran ke belakang (atas layar) terlihat
 
-      // 1. Gambar Grid (Skala 1 meter)
-      ctx.strokeStyle = '#2a2e37';
+      // 1. Gambar Heatmap 2D 360 derajat
+      if (calculations.length > 0) {
+        // Kita gambar heatmap di atas background
+        const mapData = calculate2DSpatialHeatmap(settings, calculations, width, height, cx, cy, scale, RESOLUTION);
+        
+        for (let r = 0; r < mapData.rows; r++) {
+          for (let c = 0; c < mapData.cols; c++) {
+            const spl = mapData.heatmap[r * mapData.cols + c];
+            const color = splToColor(spl, mapData.maxSpl, 35); // 35dB dynamic range
+            
+            ctx.fillStyle = color;
+            ctx.fillRect(c * RESOLUTION, r * RESOLUTION, RESOLUTION, RESOLUTION);
+          }
+        }
+      }
+
+      // 2. Gambar Grid (Skala 1 meter) dengan opacity tipis di atas heatmap
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
       ctx.lineWidth = 1;
       const gridSize = 1 * scale; 
       
@@ -65,56 +88,21 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       }
       ctx.stroke();
 
-      // 2. Hitung dan Gambar Peta Penyebaran (Polar Pattern Dispersion Map)
-      if (calculations.length > 0) {
-        const polarPoints = calculatePolarPattern(settings, calculations);
-        
-        ctx.save();
-        ctx.translate(cx, cy);
-        
-        // Radius visual maksimum untuk polar plot di canvas
-        const plotRadiusPixels = maxPlotRadius * scale * 0.8; 
-        
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        
-        for (const pt of polarPoints) {
-          // pt.angleDeg adalah -90 sampai 90.
-          // Dalam Canvas, 0 derajat biasanya arah X positif. 
-          // Arah depan kita adalah Y negatif (atas).
-          // Sehingga sudut drawing = -90 derajat (depan) + pt.angleDeg
-          const drawAngleRad = (-90 + pt.angleDeg) * Math.PI / 180;
-          
-          const r = pt.magnitude * plotRadiusPixels;
-          const px = Math.cos(drawAngleRad) * r;
-          const py = Math.sin(drawAngleRad) * r;
-          
-          ctx.lineTo(px, py);
-        }
-        ctx.lineTo(0, 0);
-        
-        // Gradasi Radial untuk peta penyebaran
-        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, plotRadiusPixels);
-        gradient.addColorStop(0, 'rgba(59, 130, 246, 0.7)'); // biru
-        gradient.addColorStop(0.5, 'rgba(59, 130, 246, 0.3)'); 
-        gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
-        
-        ctx.fillStyle = gradient;
-        ctx.fill();
-        
-        ctx.strokeStyle = 'rgba(96, 165, 250, 0.8)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        ctx.restore();
-      }
+      // Titik tengah origin (0,0) meter
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.beginPath();
+      ctx.moveTo(cx, 0);
+      ctx.lineTo(cx, height);
+      ctx.moveTo(0, cy);
+      ctx.lineTo(width, cy);
+      ctx.stroke();
 
       // 3. Gambar Fisik Subwoofer
       ctx.save();
       ctx.translate(cx, cy);
       
-      const boxW = settings.width * scale;
-      const boxH = settings.depth * scale;
+      const boxW = physicalDimensionX * scale;
+      const boxH = physicalDimensionY * scale;
       
       calculations.forEach((box) => {
         const px = box.x * scale;
@@ -123,12 +111,13 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
         const isHovered = hoveredBox?.index === box.index;
         
         ctx.fillStyle = isHovered ? '#60a5fa' : '#1f2937'; 
-        ctx.strokeStyle = isHovered ? '#ffffff' : '#4b5563'; 
+        ctx.strokeStyle = isHovered ? '#ffffff' : '#111827'; 
         ctx.lineWidth = 2;
         
         const renderX = px - boxW / 2;
         const renderY = py - boxH / 2;
         
+        // Kotak hitam untuk menutupi heatmap di area box
         ctx.fillRect(renderX, renderY, boxW, boxH);
         ctx.strokeRect(renderX, renderY, boxW, boxH);
         
@@ -141,14 +130,18 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       ctx.restore();
       
       // Indikator Skala & Info Frekuensi
-      ctx.fillStyle = '#9ca3af'; 
+      ctx.fillStyle = 'white'; 
       ctx.font = '12px Inter, sans-serif';
       ctx.fillText('Grid: 1m x 1m', 15, 25);
-      ctx.fillStyle = '#60a5fa';
-      ctx.fillText(`Peta Penyebaran @ ${settings.frequency} Hz`, 15, 45);
+      ctx.fillStyle = '#fca5a5'; // red-300
+      ctx.fillText(`2D SPL Heatmap @ ${settings.frequency} Hz`, 15, 45);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.fillText('Atas = Depan (Audience), Bawah = Belakang (Stage)', 15, 65);
     };
 
-    resizeCanvas();
+    // Only draw once on settings change, or on resize
+    draw();
+
     window.addEventListener('resize', resizeCanvas);
     
     return () => {
@@ -168,14 +161,17 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     
     const { width, height } = canvas;
     const cx = width / 2;
-    const cy = height * 0.8;
+    const cy = height / 2;
     
-    const arrayLength = (settings.count - 1) * (settings.width + settings.gap) + settings.width;
-    const maxPlotRadius = Math.max(arrayLength * 1.5, 10);
-    const scale = Math.min((width - 100) / Math.max(arrayLength, 1), (height - 100) / maxPlotRadius, 150);
+    const dimension = settings.orientation === 'Landscape' ? settings.width : settings.depth;
+    const arrayLength = (settings.count - 1) * (dimension + settings.gap) + dimension + (settings.count % 2 === 0 ? settings.centralGap - settings.gap : 0);
+    const maxPlotRadius = Math.max(arrayLength * 1.2, 10);
+    const scale = Math.min((width - 40) / Math.max(arrayLength, 1), (height - 40) / maxPlotRadius, 150);
     
-    const boxW = settings.width * scale;
-    const boxH = settings.depth * scale;
+    const physicalDimensionX = settings.orientation === 'Landscape' ? settings.width : settings.depth;
+    const physicalDimensionY = settings.orientation === 'Landscape' ? settings.depth : settings.width;
+    const boxW = physicalDimensionX * scale;
+    const boxH = physicalDimensionY * scale;
     
     const hovered = calculations.find(box => {
        const px = cx + box.x * scale;
@@ -215,8 +211,11 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
           }}
         >
           <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredBox.label}</p>
-          <p className="text-gray-300">Posisi X: <span className="text-white">{hoveredBox.x.toFixed(2)} m</span></p>
+          <p className="text-gray-300">Posisi X: <span className="text-white">{hoveredBox.x > 0 ? '+' : ''}{hoveredBox.x.toFixed(2)} m</span></p>
           <p className="text-accent font-bold mt-1 text-base">{hoveredBox.delayMs.toFixed(2)} ms</p>
+          {settings.cardioid && (
+            <p className="text-green-400 font-bold mt-1 text-xs">Total Cardioid: {hoveredBox.totalCardioidDelayMs.toFixed(2)} ms</p>
+          )}
         </div>
       )}
     </div>

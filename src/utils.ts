@@ -1,111 +1,186 @@
-import type { SubwooferSettings, BoxCalculation } from './types';
+import type { SubwooferSettings, BoxCalculation, ArrayStats } from './types';
 
-export function calculateArcDelay(settings: SubwooferSettings): BoxCalculation[] {
-  const { count, width, gap, theta, speedOfSound } = settings;
+export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalculation[], stats: ArrayStats } {
+  const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioidDelay } = settings;
   const n = count;
   
-  if (n < 3) return []; // Needs at least 3 boxes for an arc
+  if (n < 1) return { boxes: [], stats: { acousticCenterSpacing: 0, totalArrayLength: 0, upperFreqLimit: 0 } };
 
-  // 1. Center-to-center distance (d) = W + G
-  const d = width + gap;
+  // Dimension used for spacing depends on orientation
+  const dimension = orientation === 'Landscape' ? width : depth;
   
-  // 2. Total Array Length (L) for center-to-center
-  const L = (n - 1) * d;
+  // Acoustic centre spacing 'y' (in excel, it's box dimension + sub spacing)
+  const acousticCenterSpacing = dimension + gap;
   
+  // Total Array Length (L)
+  // Excel formula D29: =(($D$20-1)*$D$30)+$K$54+$D$22
+  // => (N-1) * acousticCenterSpacing + dimension + centralGap
+  const totalArrayLength = (n - 1) * acousticCenterSpacing + dimension + centralGap;
+  
+  // Upper Frequency Limit
+  // Excel formula: =MIN((343/D30)/2, (343/(D22+0.01))/2)
+  const upperFreqLimit = Math.min(
+    (speedOfSound / acousticCenterSpacing) / 2, 
+    (speedOfSound / (centralGap + 0.01)) / 2
+  );
+
+  const stats: ArrayStats = {
+    acousticCenterSpacing,
+    totalArrayLength,
+    upperFreqLimit
+  };
+
   // Convert theta to radians
   const thetaRad = (theta * Math.PI) / 180;
   
-  // 3. Imaginary Radius (R) = L / (2 * sin(Theta_in_radians / 2))
-  const R = theta > 0 ? L / (2 * Math.sin(thetaRad / 2)) : 0;
+  // Virtual Radius (r)
+  // Excel formula D31: =((($D$29-K54)/2)/SIN($F$21/2))
+  // => ((TotalLength - dimension) / 2) / sin(theta / 2)
+  const rNum = (totalArrayLength - dimension) / 2;
+  const R = theta > 0 ? rNum / Math.sin(thetaRad / 2) : 0;
   
-  const results: BoxCalculation[] = [];
-  const middleIndex = Math.floor(n / 2);
+  const boxes: BoxCalculation[] = [];
+  const isEven = n % 2 === 0;
 
   for (let i = 0; i < n; i++) {
-    // Tentukan posisi fisik X. Jika box tengah adalah x=0
-    const x = (i - middleIndex) * d;
+    let x = 0;
+    
+    // Hitung Posisi X berdasarkan ganjil/genap (sama persis dengan excel)
+    if (isEven) {
+      // Excel D44 (Even): =(($D$22-$D$23)/2)+($D$30/2)+(index * $D$30)
+      // Where index goes from 0 to N/2 - 1 for one side.
+      // We will map i from 0 to n-1.
+      const halfIndex = i < n / 2 ? (n / 2 - 1 - i) : (i - n / 2);
+      const absX = ((centralGap - gap) / 2) + (acousticCenterSpacing / 2) + (halfIndex * acousticCenterSpacing);
+      x = i < n / 2 ? -absX : absX;
+    } else {
+      // Excel D42 (Odd): index * $D$30
+      const middleIndex = Math.floor(n / 2);
+      const offsetIndex = i - middleIndex;
+      x = offsetIndex * acousticCenterSpacing;
+    }
     
     let y = 0;
     let delayMs = 0;
     
     if (R > 0) {
-      // Tentukan kemunduran imajiner Y: Y = R - sqrt(R^2 - X^2)
+      // Virtual displacement Y = R - sqrt(R^2 - X^2)
       const rSquared = R * R;
       const xSquared = x * x;
       
       if (rSquared >= xSquared) {
          y = R - Math.sqrt(rSquared - xSquared);
-         // Hitung nilai Delay (ms): Delay = (Y / c) * 1000
          delayMs = (y / speedOfSound) * 1000;
       }
     }
     
     let label = `Box ${i + 1}`;
-    if (i === 0) label += " (Kiri)";
-    else if (i === middleIndex) label += " (Tengah)";
-    else if (i === n - 1) label += " (Kanan)";
+    if (i === 0) label += " (Paling Kiri)";
+    else if (i === n - 1) label += " (Paling Kanan)";
+    else if (!isEven && i === Math.floor(n / 2)) label += " (Tengah)";
 
-    results.push({
+    boxes.push({
       index: i,
       label,
       x,
       y,
-      delayMs
+      delayMs,
+      totalCardioidDelayMs: delayMs + cardioidDelay
     });
   }
   
-  return results;
+  return { boxes, stats };
 }
 
-export interface PolarPoint {
-  angleDeg: number;
-  magnitude: number; // Normalized 0 to 1
-}
-
-export function calculatePolarPattern(settings: SubwooferSettings, boxes: BoxCalculation[]): PolarPoint[] {
-  if (boxes.length === 0) return [];
-  
+export function calculate2DSpatialHeatmap(
+  settings: SubwooferSettings, 
+  boxes: BoxCalculation[], 
+  widthPx: number, 
+  heightPx: number, 
+  cx: number, 
+  cy: number, 
+  scale: number,
+  resolution: number // block size in pixels
+) {
   const { speedOfSound, frequency } = settings;
-  const points: PolarPoint[] = [];
+  const cols = Math.ceil(widthPx / resolution);
+  const rows = Math.ceil(heightPx / resolution);
   
-  // Hitung respon polar dari -90 hingga +90 derajat
-  // 0 derajat adalah arah depan (on-axis)
-  let maxMagnitude = 0;
-  const rawMagnitudes: number[] = [];
-  
-  for (let angle = -90; angle <= 90; angle++) {
-    const angleRad = (angle * Math.PI) / 180;
-    let realSum = 0;
-    let imagSum = 0;
+  const heatmap = new Float32Array(cols * rows);
+  let maxSpl = -Infinity;
+  let minSpl = Infinity;
+
+  // Pre-calculate angular frequency
+  const k = (2 * Math.PI * frequency) / speedOfSound;
+
+  for (let r = 0; r < rows; r++) {
+    const py = r * resolution;
+    // Jarak Y dalam meter dari titik array (cy)
+    // Di canvas, y membesar ke bawah. cy adalah posisi array (Y=0).
+    // Depan array adalah daerah di mana y < cy.
+    const yMeters = (py - cy) / scale; 
     
-    for (const box of boxes) {
-      // Selisih jarak relatif untuk sudut angleRad (jika box sejajar sumbu X, gelombang merambat lurus ke arah -Y, 
-      // sehingga sudut diukur dari -Y. Arah kedatangan/keberangkatan d = x * sin(angle))
-      // Delay (detik)
-      const delaySec = box.delayMs / 1000;
+    for (let c = 0; c < cols; c++) {
+      const px = c * resolution;
+      // Jarak X dalam meter dari titik tengah (cx)
+      const xMeters = (px - cx) / scale;
       
-      // Total waktu rambat/fase = jarak / kecepatan - delay_yang_diberikan
-      // Fase = 2 * PI * f * ( x * sin(angle) / c - delaySec )
-      const phase = 2 * Math.PI * frequency * ( (box.x * Math.sin(angleRad)) / speedOfSound - delaySec );
+      let realSum = 0;
+      let imagSum = 0;
       
-      realSum += Math.cos(phase);
-      imagSum += Math.sin(phase);
-    }
-    
-    const magnitude = Math.sqrt(realSum * realSum + imagSum * imagSum);
-    rawMagnitudes.push(magnitude);
-    if (magnitude > maxMagnitude) {
-      maxMagnitude = magnitude;
+      for (const box of boxes) {
+        // Jarak dari box ke titik koordinat 2D
+        const dx = xMeters - box.x;
+        const dy = yMeters; // Box selalu di Y=0 (fisik)
+        
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Skip jika terlalu dekat (mencegah infinity)
+        if (distance < 0.1) continue;
+        
+        // Penurunan tekanan karena jarak (1/r)
+        const attenuation = 1 / distance;
+        
+        // Fasa total = k * (jarak) - 2 * PI * f * delay_in_seconds
+        const delaySec = box.delayMs / 1000;
+        const phase = k * distance - (2 * Math.PI * frequency * delaySec);
+        
+        realSum += attenuation * Math.cos(phase);
+        imagSum += attenuation * Math.sin(phase);
+      }
+      
+      // Magnitude SPL
+      const pressure = Math.sqrt(realSum * realSum + imagSum * imagSum);
+      
+      // Konversi ke dB
+      // pressure = 0 -> -inf, batas aman log10(1e-12)
+      const spl = pressure > 1e-12 ? 20 * Math.log10(pressure) : -240;
+      
+      heatmap[r * cols + c] = spl;
+      if (spl > maxSpl) maxSpl = spl;
+      if (spl < minSpl && spl > -240) minSpl = spl;
     }
   }
+
+  return { heatmap, cols, rows, maxSpl, minSpl };
+}
+
+export function splToColor(spl: number, maxSpl: number, dynamicRange: number = 40): string {
+  // SPL heatmap color logic (Rainbow: Red -> Yellow -> Green -> Blue)
+  // SPL is relative to maxSpl. 
+  // 0 dB relative to max = Red (1.0)
+  // -dynamicRange dB relative to max = Blue (0.0)
   
-  // Normalisasi
-  for (let i = 0; i <= 180; i++) {
-    points.push({
-      angleDeg: i - 90,
-      magnitude: maxMagnitude > 0 ? rawMagnitudes[i] / maxMagnitude : 0
-    });
-  }
+  const relativeSpl = spl - maxSpl;
+  let normalized = 1 + (relativeSpl / dynamicRange);
+  if (normalized < 0) normalized = 0;
+  if (normalized > 1) normalized = 1;
   
-  return points;
+  // Hue map: 0 = Red, 240 = Blue. We want normalized=1 to be Red, 0 to be Blue.
+  const hue = (1 - normalized) * 240;
+  // Saturation 100%, Lightness 50%
+  // But for aesthetic prediction maps, slightly dim the very quiet areas
+  const alpha = normalized > 0.1 ? 0.7 : normalized * 7;
+  
+  return `hsla(${hue}, 100%, 50%, ${alpha})`;
 }
