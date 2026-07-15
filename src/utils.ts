@@ -1,17 +1,27 @@
 import type { SubwooferSettings, BoxCalculation, ArrayStats } from './types';
 
-export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalculation[], stats: ArrayStats } {
-  const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay } = settings;
+export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set()): { boxes: BoxCalculation[], stats: ArrayStats } {
+  const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay, stack, cardioidReversedCount } = settings;
   const n = count;
   
   if (n < 1) return { boxes: [], stats: { acousticCenterSpacing: 0, totalArrayLength: 0, upperFreqLimit: 0 } };
 
   const dimension = orientation === 'Landscape' ? width : depth;
   const acousticCenterSpacing = dimension + gap;
-  const totalArrayLength = (n - 1) * acousticCenterSpacing + dimension + (n % 2 === 0 ? centralGap - gap : 0);
+  
+  // Total Array Length dari ujung ke ujung
+  // Ganjil: (n-1) * spacing + dimension
+  // Genap: jarak antar box terluar + dimension
+  let totalArrayLength = 0;
+  if (n % 2 === 0) {
+     totalArrayLength = centralGap + (n - 2) * acousticCenterSpacing + dimension;
+  } else {
+     totalArrayLength = (n - 1) * acousticCenterSpacing + dimension;
+  }
+  
   const upperFreqLimit = Math.min(
     (speedOfSound / acousticCenterSpacing) / 2, 
-    (speedOfSound / (centralGap + 0.01)) / 2
+    n % 2 === 0 ? (speedOfSound / centralGap) / 2 : Infinity
   );
 
   const stats: ArrayStats = {
@@ -33,7 +43,8 @@ export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalc
     
     if (isEven) {
       const halfIndex = i < n / 2 ? (n / 2 - 1 - i) : (i - n / 2);
-      const absX = ((centralGap - gap) / 2) + (acousticCenterSpacing / 2) + (halfIndex * acousticCenterSpacing);
+      // L1 / R1 berada pada centralGap / 2 dari titik pusat 0
+      const absX = (centralGap / 2) + (halfIndex * acousticCenterSpacing);
       x = i < n / 2 ? -absX : absX;
       
       const sideLabel = i < n / 2 ? 'L' : 'R';
@@ -64,8 +75,12 @@ export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalc
       }
     }
     
+    const isMuted = mutedPositions.has(i);
+    const forwardCount = cardioid ? Math.max(0, stack - cardioidReversedCount) : Math.max(1, stack);
+
     boxes.push({
       index: i * 2,
+      positionId: i,
       label: label + (cardioid ? ' (Front)' : ''),
       x,
       y: 0,
@@ -73,20 +88,27 @@ export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalc
       delayMs,
       polarity: 1,
       isRear: false,
+      stackCount: forwardCount,
+      muted: isMuted,
       totalCardioidDelayMs: delayMs + cardioidDelay
     });
     
     if (cardioid) {
       const rearPhysicalY = orientation === 'Landscape' ? depth : width;
+      const reversedCount = Math.min(stack, cardioidReversedCount);
+      
       boxes.push({
         index: i * 2 + 1,
+        positionId: i,
         label: label + ' (Rear)',
         x,
         y: rearPhysicalY, 
         virtualY,
         delayMs: delayMs + cardioidDelay, 
         polarity: -1, 
-        isRear: true
+        isRear: true,
+        stackCount: reversedCount,
+        muted: isMuted
       });
     }
   }
@@ -113,7 +135,7 @@ export function calculate2DSpatialHeatmap(
   offsetX: number,
   offsetY: number
 ) {
-  const { speedOfSound, frequency, bandwidth, resolution, stack } = settings;
+  const { speedOfSound, frequency, bandwidth, resolution, showHeatmap } = settings;
   
   const resMap = {
     'Low': 8,
@@ -129,8 +151,12 @@ export function calculate2DSpatialHeatmap(
   let maxSpl = -Infinity;
   let minSpl = Infinity;
 
+  // Jika heatmap dimatikan, kembalikan array 0
+  if (!showHeatmap) {
+      return { heatmap, cols, rows, maxSpl: 0, minSpl: 0, blockSize };
+  }
+
   const frequencies = getFrequenciesForBandwidth(frequency, bandwidth);
-  const stackMultiplier = Math.max(1, stack);
   
   for (let r = 0; r < rows; r++) {
     const py = r * blockSize; 
@@ -148,6 +174,8 @@ export function calculate2DSpatialHeatmap(
         let imagSum = 0;
         
         for (const box of boxes) {
+          if (box.muted || box.stackCount === 0) continue;
+
           const dx = xMeters - box.x;
           const dy = yMeters - box.y; 
           const distance = Math.sqrt(dx * dx + dy * dy);
@@ -157,12 +185,11 @@ export function calculate2DSpatialHeatmap(
           const attenuation = 1 / distance;
           const delaySec = box.delayMs / 1000;
           
-          // Delaying a source increases the apparent distance the sound has to travel
-          // Effective distance = physical distance + (delay time * speed of sound)
+          // Delay menambah jarak tempuh virtual (mengembangkan kurva dispersi)
           const effectiveDistance = distance + (delaySec * speedOfSound);
           const phase = k * effectiveDistance;
           
-          const pressure = attenuation * box.polarity * stackMultiplier;
+          const pressure = attenuation * box.polarity * box.stackCount;
           
           realSum += pressure * Math.cos(phase);
           imagSum += pressure * Math.sin(phase);

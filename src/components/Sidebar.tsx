@@ -10,7 +10,6 @@ interface SidebarProps {
 export function Sidebar({ settings, onChange, stats }: SidebarProps) {
   const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
 
-  // Load presets on mount
   useEffect(() => {
     const loaded = localStorage.getItem('arc-delay-presets');
     if (loaded) {
@@ -63,12 +62,14 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     if (name === 'preset') {
       const selected = savedPresets.find(p => p.id === value);
       if (selected && value !== 'Custom') {
+        const dim = settings.orientation === 'Landscape' ? selected.width : selected.depth;
         onChange({ 
           ...settings, 
           preset: value, 
           width: selected.width, 
           height: selected.height,
-          depth: selected.depth 
+          depth: selected.depth,
+          centralGap: settings.gap + dim // Auto sync centralGap on preset change
         });
       } else {
         onChange({ ...settings, preset: value });
@@ -77,7 +78,13 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     }
 
     if (name === 'orientation' || name === 'bandwidth' || name === 'resolution') {
-      onChange({ ...settings, [name]: value });
+      let dim = 0;
+      if (name === 'orientation') {
+          dim = value === 'Landscape' ? settings.width : settings.depth;
+      } else {
+          dim = settings.orientation === 'Landscape' ? settings.width : settings.depth;
+      }
+      onChange({ ...settings, [name]: value, centralGap: settings.gap + dim });
       return;
     }
 
@@ -90,22 +97,40 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     }
 
     const updatedSettings = { ...settings, [name]: isNaN(numValue) ? 0 : numValue };
+    const dimension = updatedSettings.orientation === 'Landscape' ? updatedSettings.width : updatedSettings.depth;
 
-    if (name === 'gap' && settings.centralGap === settings.gap) {
-        updatedSettings.centralGap = isNaN(numValue) ? 0 : numValue;
+    // Bidirectional Gap Sync (Central Gap is center-to-center distance)
+    // sub_gap (gap) is edge-to-edge space.
+    if (name === 'gap') {
+        updatedSettings.centralGap = (isNaN(numValue) ? 0 : numValue) + dimension;
+    }
+    if (name === 'centralGap') {
+        updatedSettings.gap = (isNaN(numValue) ? 0 : numValue) - dimension;
+        if (updatedSettings.gap < 0) updatedSettings.gap = 0; 
     }
 
-    if (name === 'width' || name === 'height' || name === 'depth') {
+    // Auto sync if user changes dimensions
+    if (name === 'width' || name === 'depth') {
       updatedSettings.preset = 'Custom';
+      updatedSettings.centralGap = updatedSettings.gap + dimension;
     }
     
     onChange(updatedSettings);
   };
 
+  const handlePrint = () => {
+    window.print();
+  };
+
   return (
     <div className="w-80 h-full bg-dark-panel border-r border-dark-border flex flex-col overflow-y-auto">
       <div className="p-6 pb-2">
-        <h1 className="text-xl font-bold text-white mb-2">Arc Delay Subwoofer</h1>
+        <div className="flex justify-between items-start mb-2">
+           <h1 className="text-xl font-bold text-white">Arc Delay Subwoofer</h1>
+           <button onClick={handlePrint} className="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-xs font-bold text-white transition-colors">
+              Export PDF
+           </button>
+        </div>
         <p className="text-sm text-gray-400 mb-4">Konfigurasi DSP & Peta Visual</p>
 
         <div className="mb-4 bg-[#0f1115] p-4 rounded border border-dark-border space-y-2 shadow-inner">
@@ -252,7 +277,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
 
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col">
-            <label htmlFor="gap" className="text-xs font-medium text-gray-300 mb-1">Sub Gap m</label>
+            <label htmlFor="gap" className="text-xs font-medium text-gray-300 mb-1" title="Jarak space antar box (edge-to-edge)">Sub Gap m</label>
             <input 
               id="gap"
               type="number" 
@@ -266,7 +291,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           </div>
           
           <div className="flex flex-col">
-            <label htmlFor="centralGap" className="text-xs font-medium text-gray-300 mb-1" title="Gap tengah (hanya untuk genap)">Central Gap m</label>
+            <label htmlFor="centralGap" className="text-xs font-medium text-gray-300 mb-1" title="Jarak center-to-center antar box (otomatis tersinkron)">Central Gap m</label>
             <input 
               id="centralGap"
               type="number" 
@@ -309,25 +334,52 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           </div>
           
           {settings.cardioid && (
-            <div className="flex flex-col pl-6">
-              <label htmlFor="cardioidDelay" className="text-xs font-medium text-gray-400 mb-1">Cardioid Delay (ms)</label>
-              <input 
-                id="cardioidDelay"
-                type="number" 
-                name="cardioidDelay"
-                min="0"
-                step="0.1"
-                value={settings.cardioidDelay}
-                onChange={handleChange}
-                className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
-              />
+            <div className="grid grid-cols-2 gap-3 pl-6">
+              <div className="flex flex-col">
+                <label htmlFor="cardioidReversedCount" className="text-xs font-medium text-gray-400 mb-1" title="Jumlah box yang menghadap belakang per stack">Reversed Box</label>
+                <input 
+                  id="cardioidReversedCount"
+                  type="number" 
+                  name="cardioidReversedCount"
+                  min="1"
+                  max={settings.stack}
+                  step="1"
+                  value={settings.cardioidReversedCount}
+                  onChange={handleChange}
+                  className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+                />
+              </div>
+              <div className="flex flex-col">
+                <label htmlFor="cardioidDelay" className="text-xs font-medium text-gray-400 mb-1">Delay (ms)</label>
+                <input 
+                  id="cardioidDelay"
+                  type="number" 
+                  name="cardioidDelay"
+                  min="0"
+                  step="0.1"
+                  value={settings.cardioidDelay}
+                  onChange={handleChange}
+                  className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+                />
+              </div>
             </div>
           )}
         </div>
 
-        {/* Pengaturan Resolusi dan Bandwidth Heatmap */}
         <div className="flex flex-col border-t border-dark-border pt-4 mt-2 space-y-3">
-          <h3 className="text-sm font-bold text-white mb-1">Peta Penyebaran (Heatmap)</h3>
+          <div className="flex justify-between items-center mb-1">
+             <h3 className="text-sm font-bold text-white">Peta Penyebaran (Heatmap)</h3>
+             <label className="flex items-center space-x-2 cursor-pointer bg-dark-border px-2 py-1 rounded">
+                <span className="text-xs font-bold text-gray-200">Show Heatmap</span>
+                <input 
+                  type="checkbox" 
+                  name="showHeatmap"
+                  checked={settings.showHeatmap}
+                  onChange={handleChange}
+                  className="w-4 h-4 rounded border-gray-300 text-accent focus:ring-accent"
+                />
+             </label>
+          </div>
           
           <div className="flex flex-col">
             <label htmlFor="frequency" className="text-xs font-medium text-gray-300 mb-1">Frekuensi Pusat (Hz)</label>
@@ -339,7 +391,8 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               max="200"
               value={settings.frequency}
               onChange={handleChange}
-              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+              disabled={!settings.showHeatmap}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm disabled:opacity-50"
             />
           </div>
 
@@ -350,7 +403,8 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               name="bandwidth"
               value={settings.bandwidth}
               onChange={handleChange}
-              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+              disabled={!settings.showHeatmap}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm disabled:opacity-50"
             >
               <option value="Single">Single Tone</option>
               <option value="1/3 Octave">1/3 Octave</option>
@@ -366,7 +420,8 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               name="resolution"
               value={settings.resolution}
               onChange={handleChange}
-              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+              disabled={!settings.showHeatmap}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm disabled:opacity-50"
             >
               <option value="Low">Low (Sangat Cepat)</option>
               <option value="Medium">Medium</option>

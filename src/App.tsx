@@ -21,26 +21,50 @@ function App() {
     frequency: 63,
     bandwidth: 'Single',
     resolution: 'Medium',
+    showHeatmap: true,
     cardioid: false,
-    cardioidDelay: 3.4
+    cardioidDelay: 3.4,
+    cardioidReversedCount: 1,
   });
 
+  const [mutedPositions, setMutedPositions] = useState<Set<number>>(new Set());
+
+  const handleToggleMute = (positionId: number) => {
+    setMutedPositions(prev => {
+      const next = new Set(prev);
+      if (next.has(positionId)) next.delete(positionId);
+      else next.add(positionId);
+      return next;
+    });
+  };
+
   const { boxes, stats } = useMemo(() => {
-    return calculateArcDelay(settings);
-  }, [settings]);
+    return calculateArcDelay(settings, mutedPositions);
+  }, [settings, mutedPositions]);
 
   return (
-    <div className="flex w-screen h-screen overflow-hidden text-gray-200 bg-[#0a0c10]">
+    <div className="flex w-screen h-screen overflow-hidden text-gray-200 bg-[#0a0c10] print:block print:h-auto print:bg-white print:text-black">
       {/* Kiri: Pengaturan */}
-      <Sidebar settings={settings} onChange={setSettings} stats={stats} />
-      
-      {/* Tengah: Visualizer Dinamis */}
-      <div className="flex-1 h-full overflow-hidden relative">
-        <Visualizer settings={settings} calculations={boxes} />
+      <div className="print:hidden h-full flex-shrink-0">
+        <Sidebar settings={settings} onChange={setSettings} stats={stats} />
       </div>
+      
+      {/* Container utama untuk Visualizer & Table saat diprint */}
+      <div className="flex-1 flex print:block print:w-full h-full overflow-hidden">
+        {/* Tengah: Visualizer Dinamis */}
+        <div className="flex-1 h-full overflow-hidden relative print:h-[600px] print:w-full print:mb-8 print:border print:border-gray-300">
+          <Visualizer settings={settings} calculations={boxes} />
+        </div>
 
-      {/* Kanan: Tabel Data */}
-      <DataTable calculations={boxes} cardioidEnabled={settings.cardioid} />
+        {/* Kanan: Tabel Data */}
+        <div className="print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0">
+          <DataTable 
+            calculations={boxes} 
+            cardioidEnabled={settings.cardioid} 
+            onToggleMute={handleToggleMute}
+          />
+        </div>
+      </div>
     </div>
   );
 }
