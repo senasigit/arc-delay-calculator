@@ -16,8 +16,8 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
       return;
     }
 
-    if (name === 'orientation') {
-      onChange({ ...settings, [name]: value as 'Landscape' | 'Portrait' });
+    if (name === 'orientation' || name === 'bandwidth' || name === 'resolution') {
+      onChange({ ...settings, [name]: value });
       return;
     }
 
@@ -189,23 +189,58 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           )}
         </div>
 
-        <div className="flex flex-col border-t border-dark-border pt-4">
-          <label htmlFor="frequency" className="text-sm font-medium text-gray-300 mb-1">Frekuensi Peta SPL (Hz)</label>
-          <select 
-            id="frequency"
-            name="frequency"
-            value={settings.frequency}
-            onChange={handleChange}
-            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors"
-          >
-            {[30, 40, 50, 55, 63, 80, 100, 120].map(freq => (
-              <option key={freq} value={freq}>{freq} Hz</option>
-            ))}
-          </select>
+        {/* Pengaturan Resolusi dan Bandwidth Heatmap */}
+        <div className="flex flex-col border-t border-dark-border pt-4 mt-2 space-y-3">
+          <h3 className="text-sm font-bold text-white mb-1">Peta Penyebaran (Heatmap)</h3>
+          
+          <div className="flex flex-col">
+            <label htmlFor="frequency" className="text-xs font-medium text-gray-300 mb-1">Frekuensi Pusat (Hz)</label>
+            <input 
+              id="frequency"
+              type="number" 
+              name="frequency"
+              min="20"
+              max="200"
+              value={settings.frequency}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            />
+          </div>
+
+          <div className="flex flex-col">
+            <label htmlFor="bandwidth" className="text-xs font-medium text-gray-300 mb-1">Bandwidth Spektrum</label>
+            <select 
+              id="bandwidth"
+              name="bandwidth"
+              value={settings.bandwidth}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            >
+              <option value="Single">Single Tone</option>
+              <option value="1/3 Octave">1/3 Octave</option>
+              <option value="1 Octave">1 Octave</option>
+              <option value="Broadband">Broadband (Full Range)</option>
+            </select>
+          </div>
+          
+          <div className="flex flex-col">
+            <label htmlFor="resolution" className="text-xs font-medium text-gray-300 mb-1">Kualitas Resolusi Peta</label>
+            <select 
+              id="resolution"
+              name="resolution"
+              value={settings.resolution}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            >
+              <option value="Low">Low (Cepat)</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High (Detail)</option>
+            </select>
+          </div>
         </div>
 
-        <div className="flex flex-col pb-4">
-          <label htmlFor="speedOfSound" className="text-sm font-medium text-gray-300 mb-1">Kecepatan Suara (m/s)</label>
+        <div className="flex flex-col pb-4 border-t border-dark-border pt-4 mt-2">
+          <label htmlFor="speedOfSound" className="text-xs font-medium text-gray-300 mb-1">Kecepatan Suara (m/s)</label>
           <input 
             id="speedOfSound"
             type="number" 
@@ -215,7 +250,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
             step="0.1"
             value={settings.speedOfSound}
             onChange={handleChange}
-            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors"
+            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
           />
         </div>
       </div>

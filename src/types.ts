@@ -8,6 +8,8 @@ export interface SubwooferSettings {
   theta: number; // in degrees
   speedOfSound: number;
   frequency: number; // in Hz
+  bandwidth: 'Single' | '1/3 Octave' | '1 Octave' | 'Broadband';
+  resolution: 'Low' | 'Medium' | 'High';
   cardioid: boolean;
   cardioidDelay: number;
 }
