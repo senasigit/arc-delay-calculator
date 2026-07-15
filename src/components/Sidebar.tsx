@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { SubwooferSettings, ArrayStats, SubwooferPreset, ReportInfo } from '../types';
+import { db } from '../firebase';
+import { collection, addDoc, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 interface SidebarProps {
   settings: SubwooferSettings;
@@ -13,42 +15,48 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
   const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
 
   useEffect(() => {
-    const loaded = localStorage.getItem('arc-delay-presets');
-    if (loaded) {
-      try {
-        setSavedPresets(JSON.parse(loaded));
-      } catch (e) {
-        console.error('Failed to parse presets');
-      }
-    }
+    // Sinkronisasi realtime ke Firestore Cloud Database
+    const unsubscribe = onSnapshot(collection(db, 'presets'), (snapshot) => {
+      const presetsData: SubwooferPreset[] = [];
+      snapshot.forEach(document => {
+         presetsData.push({ id: document.id, ...document.data() } as SubwooferPreset);
+      });
+      setSavedPresets(presetsData);
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const handleSavePreset = () => {
+  const handleSavePreset = async () => {
     const name = window.prompt('Masukkan Nama Preset Baru (Contoh: "Custom 18 Inch"):');
     if (!name || name.trim() === '') return;
 
-    const newPreset: SubwooferPreset = {
-      id: `preset-${Date.now()}`,
+    const newPreset = {
       name: name.trim(),
       width: settings.width,
       height: settings.height,
       depth: settings.depth
     };
 
-    const updatedPresets = [...savedPresets, newPreset];
-    setSavedPresets(updatedPresets);
-    localStorage.setItem('arc-delay-presets', JSON.stringify(updatedPresets));
-    
-    onChange({ ...settings, preset: newPreset.id });
+    try {
+      const docRef = await addDoc(collection(db, 'presets'), newPreset);
+      onChange({ ...settings, preset: docRef.id });
+    } catch (e) {
+      console.error('Error adding preset to Firestore', e);
+      alert('Gagal menyimpan ke Cloud Firestore. Cek koneksi Anda.');
+    }
   };
 
-  const handleDeletePreset = (id: string) => {
-    if (!window.confirm('Hapus preset ini?')) return;
-    const updatedPresets = savedPresets.filter(p => p.id !== id);
-    setSavedPresets(updatedPresets);
-    localStorage.setItem('arc-delay-presets', JSON.stringify(updatedPresets));
-    if (settings.preset === id) {
-      onChange({ ...settings, preset: 'Custom' });
+  const handleDeletePreset = async (id: string) => {
+    if (!window.confirm('Hapus preset ini secara permanen dari Cloud?')) return;
+    try {
+      await deleteDoc(doc(db, 'presets', id));
+      if (settings.preset === id) {
+        onChange({ ...settings, preset: 'Custom' });
+      }
+    } catch (e) {
+      console.error('Error deleting from Firestore', e);
+      alert('Gagal menghapus dari Cloud Firestore.');
     }
   };
 
@@ -114,13 +122,10 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
       updatedSettings.centralGap = updatedSettings.gap + dimension;
     }
     
-    // Auto-adjust reversed boxes array if stack decreases
     if (name === 'stack') {
        if (updatedSettings.stack < 1) updatedSettings.stack = 1;
        const newRev = [...updatedSettings.cardioidReversedBoxes];
-       // Ensure array is large enough, filling with false
        while (newRev.length < updatedSettings.stack) newRev.push(false);
-       // Truncate to stack size
        updatedSettings.cardioidReversedBoxes = newRev.slice(0, updatedSettings.stack);
     }
 
@@ -132,7 +137,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
   };
 
   return (
-    <div className="w-80 h-full bg-dark-panel border-r border-dark-border flex flex-col overflow-y-auto">
+    <div className="w-full md:w-80 h-full bg-dark-panel md:border-r border-dark-border flex flex-col overflow-y-auto">
       <div className="p-6 pb-2">
         <div className="flex justify-between items-start mb-2">
            <h1 className="text-xl font-bold text-white leading-tight">Arc Delay<br/>Calculator</h1>
@@ -140,7 +145,9 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
               Export PDF
            </button>
         </div>
-        <p className="text-xs text-gray-400 mb-4">Konfigurasi DSP & Laporan 3D</p>
+        <p className="text-xs text-green-400 font-bold flex items-center mb-4">
+           <span className="w-2 h-2 rounded-full bg-green-400 mr-2 animate-pulse"></span> Cloud Synced (Firestore)
+        </p>
 
         <div className="mb-4 bg-[#0f1115] p-4 rounded border border-dark-border space-y-2 shadow-inner">
           <div className="flex justify-between items-center">
@@ -175,7 +182,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
 
         <div className="flex flex-col">
           <div className="flex justify-between items-end mb-1">
-             <label htmlFor="preset" className="text-sm font-medium text-gray-300">Preset Subwoofer Lokal</label>
+             <label htmlFor="preset" className="text-sm font-medium text-gray-300">Preset Subwoofer (Cloud)</label>
           </div>
           <div className="flex space-x-2">
              <select 
@@ -183,7 +190,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
                name="preset"
                value={settings.preset}
                onChange={handleChange}
-               className="flex-1 bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+               className="flex-1 bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm w-full truncate"
              >
                <option value="Custom">-- Custom Dimension --</option>
                {savedPresets.map(p => (
@@ -201,7 +208,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
              ) : (
                 <button 
                   onClick={handleSavePreset}
-                  className="bg-[#1f2937] hover:bg-[#374151] border border-dark-border text-white px-3 py-2 rounded text-sm transition-colors"
+                  className="bg-[#1f2937] hover:bg-[#374151] border border-dark-border text-white px-3 py-2 rounded text-sm transition-colors whitespace-nowrap"
                   title="Simpan Dimensi Saat Ini"
                 >
                   Save
@@ -467,6 +474,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
           <div className="flex flex-col">
             <input 
               type="text" 
+              title="Nama Project / Acara"
               placeholder="Nama Project / Acara"
               value={reportInfo.project}
               onChange={(e) => onReportInfoChange({...reportInfo, project: e.target.value})}
@@ -477,6 +485,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
           <div className="flex flex-col">
             <input 
               type="text" 
+              title="Venue / Lokasi"
               placeholder="Venue / Lokasi"
               value={reportInfo.venue}
               onChange={(e) => onReportInfoChange({...reportInfo, venue: e.target.value})}
@@ -487,6 +496,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
           <div className="grid grid-cols-2 gap-2">
             <input 
               type="text" 
+              title="System Engineer"
               placeholder="System Engineer"
               value={reportInfo.engineer}
               onChange={(e) => onReportInfoChange({...reportInfo, engineer: e.target.value})}

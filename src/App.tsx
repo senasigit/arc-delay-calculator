@@ -7,13 +7,13 @@ import { calculateArcDelay } from './utils';
 
 function App() {
   const [settings, setSettings] = useState<SubwooferSettings>({
-    count: 7, // User want to test 7
+    count: 7,
     preset: 'Custom',
     orientation: 'Landscape',
     width: 1.15,
     height: 0.55,
     depth: 0.75,
-    stack: 3, // Testing stack 3
+    stack: 3,
     gap: 0.60,
     centralGap: 0.60,
     theta: 90,
@@ -22,9 +22,9 @@ function App() {
     bandwidth: 'Single',
     resolution: 'Medium',
     showHeatmap: true,
-    cardioid: true, // Auto enable to show feature
+    cardioid: true,
     cardioidDelay: 3.4,
-    cardioidReversedBoxes: [false, true, false, false], // Middle box reversed
+    cardioidReversedBoxes: [false, true, false, false],
   });
 
   const [reportInfo, setReportInfo] = useState<ReportInfo>({
@@ -36,6 +36,7 @@ function App() {
 
   const [mutedPositions, setMutedPositions] = useState<Set<number>>(new Set());
   const [disabledCardioidPositions, setDisabledCardioidPositions] = useState<Set<number>>(new Set());
+  const [activeTab, setActiveTab] = useState<'setup' | 'map' | 'dsp'>('setup');
 
   const handleToggleMute = (positionId: number) => {
     setMutedPositions(prev => {
@@ -60,9 +61,17 @@ function App() {
   }, [settings, mutedPositions, disabledCardioidPositions]);
 
   return (
-    <div className="flex w-screen h-screen overflow-hidden text-gray-200 bg-[#0a0c10] print:block print:h-auto print:bg-white print:text-black">
-      {/* Sidebar - Sembunyi saat diprint */}
-      <div className="print:hidden h-full flex-shrink-0">
+    <div className="flex w-screen h-screen overflow-hidden text-gray-200 bg-[#0a0c10] print:block print:h-auto print:bg-white print:text-black flex-col md:flex-row">
+      
+      {/* Mobile Top Nav / Tabs */}
+      <div className="md:hidden flex bg-[#0f1115] border-b border-gray-800 p-2 space-x-2 print:hidden z-20 shadow-md">
+         <button onClick={() => setActiveTab('setup')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>⚙️ Setup</button>
+         <button onClick={() => setActiveTab('map')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>🗺️ 3D Map</button>
+         <button onClick={() => setActiveTab('dsp')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>🎛️ DSP</button>
+      </div>
+
+      {/* Sidebar */}
+      <div className={`${activeTab === 'setup' ? 'block' : 'hidden'} md:block h-full md:w-80 w-full flex-shrink-0 print:hidden`}>
         <Sidebar 
           settings={settings} 
           onChange={setSettings} 
@@ -73,7 +82,7 @@ function App() {
       </div>
       
       {/* Area Utama */}
-      <div className="flex-1 flex flex-col print:block print:w-full h-full overflow-hidden relative">
+      <div className={`${activeTab === 'setup' ? 'hidden' : 'flex'} md:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
         
         {/* HEADER LAPORAN (HANYA TAMPIL SAAT DIPRINT ATAU DILIHAT DI PDF) */}
         <div className="hidden print:block mb-6 pt-4 border-b-2 border-gray-800 pb-4">
@@ -91,14 +100,14 @@ function App() {
         </div>
         
         {/* Area Map & Tabel */}
-        <div className="flex-1 flex print:block print:w-full h-full overflow-hidden">
+        <div className="flex-1 flex flex-col md:flex-row print:block print:w-full h-full overflow-hidden">
           {/* Tengah: Visualizer Dinamis */}
-          <div className="flex-1 h-full overflow-hidden relative print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300">
+          <div className={`${activeTab === 'map' ? 'flex' : 'hidden'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300`}>
             <Visualizer settings={settings} groups={groups} />
           </div>
 
           {/* Kanan: Tabel Data */}
-          <div className="print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0">
+          <div className={`${activeTab === 'dsp' ? 'flex' : 'hidden'} md:flex flex-col md:w-80 w-full print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0`}>
             <DataTable 
               groups={groups} 
               cardioidEnabled={settings.cardioid}

@@ -225,9 +225,12 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
       ctx.restore();
     };
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-    return () => window.removeEventListener('resize', resizeCanvas);
+    const observer = new ResizeObserver(() => {
+      resizeCanvas();
+    });
+    
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [settings, groups, hoveredGroup, zoomScale, offset]);
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
