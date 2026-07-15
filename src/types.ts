@@ -1,37 +1,42 @@
 export interface SubwooferSettings {
   count: number;
-  preset: string; // 'Custom' or preset name
+  preset: string; 
   orientation: 'Landscape' | 'Portrait';
   width: number;
   height: number;
   depth: number;
-  stack: number; // Total tumpukan per posisi
+  stack: number; 
   gap: number;
   centralGap: number;
-  theta: number; // in degrees
+  theta: number; 
   speedOfSound: number;
-  frequency: number; // in Hz
+  frequency: number; 
   bandwidth: 'Single' | '1/3 Octave' | '1 Octave' | 'Broadband';
   resolution: 'Low' | 'Medium' | 'High';
   showHeatmap: boolean;
   cardioid: boolean;
   cardioidDelay: number;
-  cardioidReversedCount: number; // Berapa box yg dibalik dari total stack
+  cardioidReversedBoxes: boolean[]; // true = reversed/rear, index 0 = bottom box
 }
 
-export interface BoxCalculation {
-  index: number;
-  positionId: number; // Group ID untuk Mute per stack
-  label: string;
-  x: number; // Physical X position
-  y: number; // Physical Y displacement
-  virtualY: number; // Virtual Y displacement from arc delay
-  delayMs: number; // Total Delay applied to this box
-  polarity: 1 | -1; // 1 for front, -1 for rear cardioid
+export interface PhysicalBox {
+  stackIndex: number; 
+  x: number;
+  y: number; 
+  z: number; 
+  delayMs: number; 
+  polarity: 1 | -1; 
   isRear: boolean;
-  stackCount: number; // Berapa box yg merepresentasikan titik ini
+}
+
+export interface BoxGroup {
+  positionId: number; 
+  label: string;
+  x: number; 
+  virtualY: number; 
+  baseDelayMs: number; 
   muted: boolean;
-  totalCardioidDelayMs?: number; // Info column
+  boxes: PhysicalBox[];
 }
 
 export interface ArrayStats {
@@ -46,4 +51,11 @@ export interface SubwooferPreset {
   width: number;
   height: number;
   depth: number;
+}
+
+export interface ReportInfo {
+  project: string;
+  venue: string;
+  engineer: string;
+  date: string;
 }

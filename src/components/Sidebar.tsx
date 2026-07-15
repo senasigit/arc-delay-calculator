@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
-import type { SubwooferSettings, ArrayStats, SubwooferPreset } from '../types';
+import type { SubwooferSettings, ArrayStats, SubwooferPreset, ReportInfo } from '../types';
 
 interface SidebarProps {
   settings: SubwooferSettings;
   onChange: (settings: SubwooferSettings) => void;
   stats: ArrayStats;
+  reportInfo: ReportInfo;
+  onReportInfoChange: (info: ReportInfo) => void;
 }
 
-export function Sidebar({ settings, onChange, stats }: SidebarProps) {
+export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoChange }: SidebarProps) {
   const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
 
   useEffect(() => {
@@ -69,7 +71,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           width: selected.width, 
           height: selected.height,
           depth: selected.depth,
-          centralGap: settings.gap + dim // Auto sync centralGap on preset change
+          centralGap: settings.gap + dim
         });
       } else {
         onChange({ ...settings, preset: value });
@@ -99,8 +101,6 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     const updatedSettings = { ...settings, [name]: isNaN(numValue) ? 0 : numValue };
     const dimension = updatedSettings.orientation === 'Landscape' ? updatedSettings.width : updatedSettings.depth;
 
-    // Bidirectional Gap Sync (Central Gap is center-to-center distance)
-    // sub_gap (gap) is edge-to-edge space.
     if (name === 'gap') {
         updatedSettings.centralGap = (isNaN(numValue) ? 0 : numValue) + dimension;
     }
@@ -109,12 +109,21 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
         if (updatedSettings.gap < 0) updatedSettings.gap = 0; 
     }
 
-    // Auto sync if user changes dimensions
     if (name === 'width' || name === 'depth') {
       updatedSettings.preset = 'Custom';
       updatedSettings.centralGap = updatedSettings.gap + dimension;
     }
     
+    // Auto-adjust reversed boxes array if stack decreases
+    if (name === 'stack') {
+       if (updatedSettings.stack < 1) updatedSettings.stack = 1;
+       const newRev = [...updatedSettings.cardioidReversedBoxes];
+       // Ensure array is large enough, filling with false
+       while (newRev.length < updatedSettings.stack) newRev.push(false);
+       // Truncate to stack size
+       updatedSettings.cardioidReversedBoxes = newRev.slice(0, updatedSettings.stack);
+    }
+
     onChange(updatedSettings);
   };
 
@@ -126,12 +135,12 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     <div className="w-80 h-full bg-dark-panel border-r border-dark-border flex flex-col overflow-y-auto">
       <div className="p-6 pb-2">
         <div className="flex justify-between items-start mb-2">
-           <h1 className="text-xl font-bold text-white">Arc Delay Subwoofer</h1>
-           <button onClick={handlePrint} className="bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-xs font-bold text-white transition-colors">
+           <h1 className="text-xl font-bold text-white leading-tight">Arc Delay<br/>Calculator</h1>
+           <button onClick={handlePrint} className="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs font-bold text-white transition-colors border border-gray-600 shadow">
               Export PDF
            </button>
         </div>
-        <p className="text-sm text-gray-400 mb-4">Konfigurasi DSP & Peta Visual</p>
+        <p className="text-xs text-gray-400 mb-4">Konfigurasi DSP & Laporan 3D</p>
 
         <div className="mb-4 bg-[#0f1115] p-4 rounded border border-dark-border space-y-2 shadow-inner">
           <div className="flex justify-between items-center">
@@ -268,6 +277,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               name="stack"
               min="1"
               step="1"
+              max="6"
               value={settings.stack}
               onChange={handleChange}
               className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
@@ -334,23 +344,28 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           </div>
           
           {settings.cardioid && (
-            <div className="grid grid-cols-2 gap-3 pl-6">
-              <div className="flex flex-col">
-                <label htmlFor="cardioidReversedCount" className="text-xs font-medium text-gray-400 mb-1" title="Jumlah box yang menghadap belakang per stack">Reversed Box</label>
-                <input 
-                  id="cardioidReversedCount"
-                  type="number" 
-                  name="cardioidReversedCount"
-                  min="1"
-                  max={settings.stack}
-                  step="1"
-                  value={settings.cardioidReversedCount}
-                  onChange={handleChange}
-                  className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
-                />
+            <div className="flex flex-col pl-6">
+              <label className="text-xs font-medium text-gray-400 mb-1">Pilih Box Menghadap Belakang (Reversed)</label>
+              <div className="flex space-x-4 mt-1 mb-3">
+                {Array.from({ length: settings.stack }).map((_, i) => (
+                   <label key={i} className="flex flex-col items-center cursor-pointer">
+                      <span className="text-[10px] text-gray-400 mb-1">Box {i + 1}</span>
+                      <input 
+                        type="checkbox"
+                        checked={settings.cardioidReversedBoxes[i] || false}
+                        onChange={(e) => {
+                           const newRev = [...settings.cardioidReversedBoxes];
+                           newRev[i] = e.target.checked;
+                           onChange({ ...settings, cardioidReversedBoxes: newRev });
+                        }}
+                        className="w-4 h-4 text-purple-500 bg-[#0f1115] border-gray-500 rounded"
+                      />
+                   </label>
+                ))}
               </div>
+
               <div className="flex flex-col">
-                <label htmlFor="cardioidDelay" className="text-xs font-medium text-gray-400 mb-1">Delay (ms)</label>
+                <label htmlFor="cardioidDelay" className="text-xs font-medium text-gray-400 mb-1">Rear Additional Delay (ms)</label>
                 <input 
                   id="cardioidDelay"
                   type="number" 
@@ -359,7 +374,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
                   step="0.1"
                   value={settings.cardioidDelay}
                   onChange={handleChange}
-                  className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+                  className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm w-32"
                 />
               </div>
             </div>
@@ -444,6 +459,48 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
             className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
           />
         </div>
+
+        {/* Data Laporan PDF */}
+        <div className="flex flex-col pb-8 border-t border-dark-border pt-4 mt-2 space-y-3">
+          <h3 className="text-sm font-bold text-white mb-1">Data Laporan Export (PDF)</h3>
+          
+          <div className="flex flex-col">
+            <input 
+              type="text" 
+              placeholder="Nama Project / Acara"
+              value={reportInfo.project}
+              onChange={(e) => onReportInfoChange({...reportInfo, project: e.target.value})}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            />
+          </div>
+          
+          <div className="flex flex-col">
+            <input 
+              type="text" 
+              placeholder="Venue / Lokasi"
+              value={reportInfo.venue}
+              onChange={(e) => onReportInfoChange({...reportInfo, venue: e.target.value})}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            />
+          </div>
+          
+          <div className="grid grid-cols-2 gap-2">
+            <input 
+              type="text" 
+              placeholder="System Engineer"
+              value={reportInfo.engineer}
+              onChange={(e) => onReportInfoChange({...reportInfo, engineer: e.target.value})}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            />
+            <input 
+              type="date" 
+              value={reportInfo.date}
+              onChange={(e) => onReportInfoChange({...reportInfo, date: e.target.value})}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+            />
+          </div>
+        </div>
+
       </div>
     </div>
   );

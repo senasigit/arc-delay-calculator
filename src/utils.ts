@@ -1,17 +1,14 @@
-import type { SubwooferSettings, BoxCalculation, ArrayStats } from './types';
+import type { SubwooferSettings, BoxGroup, PhysicalBox, ArrayStats } from './types';
 
-export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set()): { boxes: BoxCalculation[], stats: ArrayStats } {
-  const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay, stack, cardioidReversedCount } = settings;
+export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set()): { groups: BoxGroup[], stats: ArrayStats } {
+  const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay, stack, cardioidReversedBoxes } = settings;
   const n = count;
   
-  if (n < 1) return { boxes: [], stats: { acousticCenterSpacing: 0, totalArrayLength: 0, upperFreqLimit: 0 } };
+  if (n < 1) return { groups: [], stats: { acousticCenterSpacing: 0, totalArrayLength: 0, upperFreqLimit: 0 } };
 
   const dimension = orientation === 'Landscape' ? width : depth;
   const acousticCenterSpacing = dimension + gap;
   
-  // Total Array Length dari ujung ke ujung
-  // Ganjil: (n-1) * spacing + dimension
-  // Genap: jarak antar box terluar + dimension
   let totalArrayLength = 0;
   if (n % 2 === 0) {
      totalArrayLength = centralGap + (n - 2) * acousticCenterSpacing + dimension;
@@ -34,7 +31,7 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
   const rNum = (totalArrayLength - dimension) / 2;
   const R = theta > 0 ? rNum / Math.sin(thetaRad / 2) : 0;
   
-  const boxes: BoxCalculation[] = [];
+  const groups: BoxGroup[] = [];
   const isEven = n % 2 === 0;
 
   for (let i = 0; i < n; i++) {
@@ -43,7 +40,6 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
     
     if (isEven) {
       const halfIndex = i < n / 2 ? (n / 2 - 1 - i) : (i - n / 2);
-      // L1 / R1 berada pada centralGap / 2 dari titik pusat 0
       const absX = (centralGap / 2) + (halfIndex * acousticCenterSpacing);
       x = i < n / 2 ? -absX : absX;
       
@@ -76,45 +72,38 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
     }
     
     const isMuted = mutedPositions.has(i);
-    const forwardCount = cardioid ? Math.max(0, stack - cardioidReversedCount) : Math.max(1, stack);
-
-    boxes.push({
-      index: i * 2,
-      positionId: i,
-      label: label + (cardioid ? ' (Front)' : ''),
-      x,
-      y: 0,
-      virtualY,
-      delayMs,
-      polarity: 1,
-      isRear: false,
-      stackCount: forwardCount,
-      muted: isMuted,
-      totalCardioidDelayMs: delayMs + cardioidDelay
-    });
+    const physicalBoxes: PhysicalBox[] = [];
+    const rearPhysicalY = orientation === 'Landscape' ? depth : width;
     
-    if (cardioid) {
-      const rearPhysicalY = orientation === 'Landscape' ? depth : width;
-      const reversedCount = Math.min(stack, cardioidReversedCount);
+    for (let s = 0; s < stack; s++) {
+      const isRear = cardioid && cardioidReversedBoxes[s] === true;
+      const boxZ = (s * settings.height) + (settings.height / 2); // Ketinggian titik pusat box dari lantai
+      const boxY = isRear ? rearPhysicalY : 0; 
       
-      boxes.push({
-        index: i * 2 + 1,
-        positionId: i,
-        label: label + ' (Rear)',
+      physicalBoxes.push({
+        stackIndex: s,
         x,
-        y: rearPhysicalY, 
-        virtualY,
-        delayMs: delayMs + cardioidDelay, 
-        polarity: -1, 
-        isRear: true,
-        stackCount: reversedCount,
-        muted: isMuted
+        y: boxY,
+        z: boxZ,
+        delayMs: delayMs + (isRear ? cardioidDelay : 0),
+        polarity: isRear ? -1 : 1,
+        isRear
       });
     }
+
+    groups.push({
+      positionId: i,
+      label,
+      x,
+      virtualY,
+      baseDelayMs: delayMs,
+      muted: isMuted,
+      boxes: physicalBoxes
+    });
   }
   
-  boxes.sort((a, b) => a.x - b.x);
-  return { boxes, stats };
+  groups.sort((a, b) => a.x - b.x);
+  return { groups, stats };
 }
 
 function getFrequenciesForBandwidth(fc: number, bandwidth: string): number[] {
@@ -126,7 +115,7 @@ function getFrequenciesForBandwidth(fc: number, bandwidth: string): number[] {
 
 export function calculate2DSpatialHeatmap(
   settings: SubwooferSettings, 
-  boxes: BoxCalculation[], 
+  groups: BoxGroup[], 
   widthPx: number, 
   heightPx: number, 
   cx: number, 
@@ -151,12 +140,12 @@ export function calculate2DSpatialHeatmap(
   let maxSpl = -Infinity;
   let minSpl = Infinity;
 
-  // Jika heatmap dimatikan, kembalikan array 0
   if (!showHeatmap) {
       return { heatmap, cols, rows, maxSpl: 0, minSpl: 0, blockSize };
   }
 
   const frequencies = getFrequenciesForBandwidth(frequency, bandwidth);
+  const EAR_HEIGHT = 1.6; // Rata-rata tinggi telinga manusia (1.6 meter)
   
   for (let r = 0; r < rows; r++) {
     const py = r * blockSize; 
@@ -173,26 +162,30 @@ export function calculate2DSpatialHeatmap(
         let realSum = 0;
         let imagSum = 0;
         
-        for (const box of boxes) {
-          if (box.muted || box.stackCount === 0) continue;
+        for (const group of groups) {
+          if (group.muted) continue;
 
-          const dx = xMeters - box.x;
-          const dy = yMeters - box.y; 
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          
-          if (distance < 0.1) continue;
-          
-          const attenuation = 1 / distance;
-          const delaySec = box.delayMs / 1000;
-          
-          // Delay menambah jarak tempuh virtual (mengembangkan kurva dispersi)
-          const effectiveDistance = distance + (delaySec * speedOfSound);
-          const phase = k * effectiveDistance;
-          
-          const pressure = attenuation * box.polarity * box.stackCount;
-          
-          realSum += pressure * Math.cos(phase);
-          imagSum += pressure * Math.sin(phase);
+          for (const box of group.boxes) {
+            const dx = xMeters - box.x;
+            const dy = yMeters - box.y; 
+            const dz = EAR_HEIGHT - box.z; // Kalkulasi 3D murni!
+            
+            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            
+            if (distance < 0.1) continue;
+            
+            const attenuation = 1 / distance;
+            const delaySec = box.delayMs / 1000;
+            
+            // Delay menambah jarak tempuh virtual (mengembangkan kurva dispersi)
+            const effectiveDistance = distance + (delaySec * speedOfSound);
+            const phase = k * effectiveDistance;
+            
+            const pressure = attenuation * box.polarity; // stackCount is naturally handled by the inner loop
+            
+            realSum += pressure * Math.cos(phase);
+            imagSum += pressure * Math.sin(phase);
+          }
         }
         
         const pressureSquared = (realSum * realSum) + (imagSum * imagSum);

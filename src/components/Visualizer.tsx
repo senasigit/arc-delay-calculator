@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SubwooferSettings, BoxCalculation } from '../types';
+import type { SubwooferSettings, BoxGroup } from '../types';
 import { calculate2DSpatialHeatmap, splToColor } from '../utils';
 
 interface VisualizerProps {
   settings: SubwooferSettings;
-  calculations: BoxCalculation[];
+  groups: BoxGroup[];
 }
 
-export function Visualizer({ settings, calculations }: VisualizerProps) {
+export function Visualizer({ settings, groups }: VisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   
-  const [hoveredBox, setHoveredBox] = useState<BoxCalculation | null>(null);
+  const [hoveredGroup, setHoveredGroup] = useState<BoxGroup | null>(null);
 
   const [zoomScale, setZoomScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -62,10 +62,10 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       const cx = logicalWidth / 2;
       const cy = logicalHeight / 2; 
 
-      if (calculations.length > 0 && settings.showHeatmap) {
+      if (groups.length > 0 && settings.showHeatmap) {
         const mapData = calculate2DSpatialHeatmap(
           settings, 
-          calculations, 
+          groups, 
           logicalWidth, 
           logicalHeight, 
           cx, 
@@ -149,25 +149,12 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       const boxW = physicalDimensionX * scale;
       const boxH = physicalDimensionY * scale;
       
-      const uniquePositions = new Map<number, { front: BoxCalculation, rear?: BoxCalculation }>();
-      calculations.forEach(box => {
-         if (!uniquePositions.has(box.positionId)) {
-            uniquePositions.set(box.positionId, { front: box });
-         }
-         if (box.isRear) {
-            uniquePositions.get(box.positionId)!.rear = box;
-         } else {
-            uniquePositions.get(box.positionId)!.front = box;
-         }
-      });
-
-      uniquePositions.forEach(({ front, rear }) => {
-        const px = front.x * scale;
-        // Secara visual, semuanya digambar di origin front (ditumpuk dari atas)
-        const py = 0; 
+      groups.forEach(group => {
+        const px = group.x * scale;
+        const py = 0; // Tampilan 2D selalu ditumpuk di koordinat fisik Y (0)
         
-        const isHovered = hoveredBox?.positionId === front.positionId;
-        const isMuted = front.muted;
+        const isHovered = hoveredGroup?.positionId === group.positionId;
+        const isMuted = group.muted;
         
         ctx.fillStyle = isMuted ? '#1f2937' : (isHovered ? '#60a5fa' : '#374151'); 
         ctx.strokeStyle = isMuted ? '#111827' : (isHovered ? '#ffffff' : '#111827'); 
@@ -179,7 +166,7 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
         ctx.fillRect(renderX, renderY, boxW, boxH);
         ctx.strokeRect(renderX, renderY, boxW, boxH);
         
-        ctx.fillStyle = isMuted ? '#4b5563' : '#ef4444'; // Red dot
+        ctx.fillStyle = isMuted ? '#4b5563' : '#ef4444'; // Red dot untuk indikasi center depan (tampak atas)
         ctx.beginPath();
         ctx.arc(px, renderY + boxH * 0.2, 3, 0, Math.PI * 2);
         ctx.fill();
@@ -190,10 +177,13 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
            ctx.textAlign = 'center';
            ctx.textBaseline = 'middle';
            
-           if (settings.cardioid && rear) {
-               ctx.fillText(`\u2191 ${front.stackCount}`, px, py - 5);
+           const frontCount = group.boxes.filter(b => !b.isRear).length;
+           const rearCount = group.boxes.filter(b => b.isRear).length;
+           
+           if (settings.cardioid && rearCount > 0) {
+               ctx.fillText(`\u2191 ${frontCount}`, px, py - 5);
                ctx.fillStyle = isMuted ? 'rgba(167, 139, 250, 0.3)' : '#a78bfa'; // Purple for rear
-               ctx.fillText(`\u2193 ${rear.stackCount}`, px, py + 10);
+               ctx.fillText(`\u2193 ${rearCount}`, px, py + 10);
            } else {
                ctx.fillText(`x${settings.stack}`, px, py);
            }
@@ -238,7 +228,7 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     return () => window.removeEventListener('resize', resizeCanvas);
-  }, [settings, calculations, hoveredBox, zoomScale, offset]);
+  }, [settings, groups, hoveredGroup, zoomScale, offset]);
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -294,9 +284,9 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    const hovered = calculations.find(box => {
-       const px = cx + offset.x + box.x * scale;
-       const py = cy + offset.y + 0; // Visual origin is 0 for the stack
+    const hovered = groups.find(group => {
+       const px = cx + offset.x + group.x * scale;
+       const py = cy + offset.y + 0;
        
        const left = px - boxW / 2;
        const right = px + boxW / 2;
@@ -306,7 +296,7 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
        return mouseX >= left && mouseX <= right && mouseY >= top && mouseY <= bottom;
     });
     
-    setHoveredBox(hovered || null);
+    setHoveredGroup(hovered || null);
   };
 
   return (
@@ -323,22 +313,26 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       
       <div 
         ref={tooltipRef}
-        className={`fixed pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20 transition-opacity duration-150 print:hidden ${hoveredBox && !isDragging ? 'opacity-100' : 'opacity-0'}`}
+        className={`fixed pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20 transition-opacity duration-150 print:hidden ${hoveredGroup && !isDragging ? 'opacity-100' : 'opacity-0'}`}
       >
-        {hoveredBox && (
+        {hoveredGroup && (
           <>
-            <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredBox.label}</p>
-            {hoveredBox.muted && <p className="text-red-400 font-bold text-xs mb-1">MUTED</p>}
-            <p className="text-gray-300 text-xs">X: {hoveredBox.x > 0 ? '+' : ''}{hoveredBox.x.toFixed(2)} m</p>
-            {!hoveredBox.isRear && (
-                <p className="text-accent font-bold mt-1 text-base">{hoveredBox.delayMs.toFixed(2)} ms</p>
-            )}
-            {settings.cardioid && hoveredBox.isRear && (
-              <p className="text-purple-400 font-bold mt-1 text-xs">Inverted Polarity</p>
-            )}
-            {settings.cardioid && (
-              <p className="text-green-400 font-bold mt-1 text-xs">Total Rear Delay: {hoveredBox.totalCardioidDelayMs?.toFixed(2)} ms</p>
-            )}
+            <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredGroup.label}</p>
+            {hoveredGroup.muted && <p className="text-red-400 font-bold text-xs mb-1">MUTED</p>}
+            <p className="text-gray-300 text-xs mb-1">X: {hoveredGroup.x > 0 ? '+' : ''}{hoveredGroup.x.toFixed(2)} m</p>
+            
+            <div className="mt-2 border-t border-gray-700 pt-1">
+              {[...hoveredGroup.boxes].reverse().map(box => (
+                <div key={box.stackIndex} className="flex justify-between space-x-3 text-xs mb-1">
+                   <span className="text-gray-400">Box {box.stackIndex + 1}</span>
+                   {box.isRear ? (
+                      <span className="text-purple-400 font-bold">{box.delayMs.toFixed(2)}ms (Rear)</span>
+                   ) : (
+                      <span className="text-accent font-bold">{box.delayMs.toFixed(2)}ms</span>
+                   )}
+                </div>
+              ))}
+            </div>
           </>
         )}
       </div>
