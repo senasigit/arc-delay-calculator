@@ -10,8 +10,8 @@ interface VisualizerProps {
 export function Visualizer({ settings, calculations }: VisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   const [hoveredBox, setHoveredBox] = useState<BoxCalculation | null>(null);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   // Panning and Zooming State
   const [zoomScale, setZoomScale] = useState(1);
@@ -190,7 +190,10 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    setMousePos({ x: e.clientX, y: e.clientY });
+    if (tooltipRef.current) {
+      tooltipRef.current.style.left = `${e.clientX + 15}px`;
+      tooltipRef.current.style.top = `${e.clientY + 15}px`;
+    }
     
     const { width, height } = canvas;
     const cx = width / 2;
@@ -236,11 +239,8 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       {/* Tooltip */}
       {hoveredBox && !isDragging && (
         <div 
-          className="absolute pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20"
-          style={{ 
-            left: mousePos.x + 15, 
-            top: mousePos.y + 15,
-          }}
+          ref={tooltipRef}
+          className="fixed pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20"
         >
           <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredBox.label}</p>
           <p className="text-gray-300">Posisi X: <span className="text-white">{hoveredBox.x > 0 ? '+' : ''}{hoveredBox.x.toFixed(2)} m</span></p>
