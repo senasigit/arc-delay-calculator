@@ -1,5 +1,5 @@
-import type { SubwooferSettings, ArrayStats } from '../types';
-import { SUBWOOFER_PRESETS } from '../utils';
+import { useState, useEffect } from 'react';
+import type { SubwooferSettings, ArrayStats, SubwooferPreset } from '../types';
 
 interface SidebarProps {
   settings: SubwooferSettings;
@@ -8,6 +8,48 @@ interface SidebarProps {
 }
 
 export function Sidebar({ settings, onChange, stats }: SidebarProps) {
+  const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
+
+  // Load presets on mount
+  useEffect(() => {
+    const loaded = localStorage.getItem('arc-delay-presets');
+    if (loaded) {
+      try {
+        setSavedPresets(JSON.parse(loaded));
+      } catch (e) {
+        console.error('Failed to parse presets');
+      }
+    }
+  }, []);
+
+  const handleSavePreset = () => {
+    const name = window.prompt('Masukkan Nama Preset Baru (Contoh: "Custom 18 Inch"):');
+    if (!name || name.trim() === '') return;
+
+    const newPreset: SubwooferPreset = {
+      id: `preset-${Date.now()}`,
+      name: name.trim(),
+      width: settings.width,
+      depth: settings.depth
+    };
+
+    const updatedPresets = [...savedPresets, newPreset];
+    setSavedPresets(updatedPresets);
+    localStorage.setItem('arc-delay-presets', JSON.stringify(updatedPresets));
+    
+    onChange({ ...settings, preset: newPreset.id });
+  };
+
+  const handleDeletePreset = (id: string) => {
+    if (!window.confirm('Hapus preset ini?')) return;
+    const updatedPresets = savedPresets.filter(p => p.id !== id);
+    setSavedPresets(updatedPresets);
+    localStorage.setItem('arc-delay-presets', JSON.stringify(updatedPresets));
+    if (settings.preset === id) {
+      onChange({ ...settings, preset: 'Custom' });
+    }
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     
@@ -18,8 +60,8 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
     }
 
     if (name === 'preset') {
-      const selected = SUBWOOFER_PRESETS.find(p => p.id === value);
-      if (selected && selected.id !== 'Custom') {
+      const selected = savedPresets.find(p => p.id === value);
+      if (selected && value !== 'Custom') {
         onChange({ 
           ...settings, 
           preset: value, 
@@ -39,7 +81,6 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
 
     let numValue = parseFloat(value);
     
-    // Validate number of subwoofers
     if (name === 'count') {
       numValue = parseInt(value, 10);
       if (numValue < 2) numValue = 2;
@@ -48,13 +89,10 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
 
     const updatedSettings = { ...settings, [name]: isNaN(numValue) ? 0 : numValue };
 
-    // Auto-sync centralGap with gap if they are changing gap and it was previously synced
-    // Or just always sync it to make it easy for users unless they manually change centralGap
     if (name === 'gap' && settings.centralGap === settings.gap) {
         updatedSettings.centralGap = isNaN(numValue) ? 0 : numValue;
     }
 
-    // Set Custom if width or depth is manually changed
     if (name === 'width' || name === 'depth') {
       updatedSettings.preset = 'Custom';
     }
@@ -100,21 +138,43 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
         </div>
 
         <div className="flex flex-col">
-          <label htmlFor="preset" className="text-sm font-medium text-gray-300 mb-1">Preset Subwoofer</label>
-          <select 
-            id="preset"
-            name="preset"
-            value={settings.preset}
-            onChange={handleChange}
-            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
-          >
-            {SUBWOOFER_PRESETS.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <div className="flex justify-between items-end mb-1">
+             <label htmlFor="preset" className="text-sm font-medium text-gray-300">Preset Subwoofer Lokal</label>
+          </div>
+          <div className="flex space-x-2">
+             <select 
+               id="preset"
+               name="preset"
+               value={settings.preset}
+               onChange={handleChange}
+               className="flex-1 bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+             >
+               <option value="Custom">-- Custom Dimension --</option>
+               {savedPresets.map(p => (
+                 <option key={p.id} value={p.id}>{p.name}</option>
+               ))}
+             </select>
+             {settings.preset !== 'Custom' ? (
+                <button 
+                  onClick={() => handleDeletePreset(settings.preset)}
+                  className="bg-red-900/50 hover:bg-red-900 border border-red-800 text-red-200 px-3 py-2 rounded text-sm transition-colors"
+                  title="Hapus Preset"
+                >
+                  X
+                </button>
+             ) : (
+                <button 
+                  onClick={handleSavePreset}
+                  className="bg-[#1f2937] hover:bg-[#374151] border border-dark-border text-white px-3 py-2 rounded text-sm transition-colors"
+                  title="Simpan Dimensi Saat Ini"
+                >
+                  Save
+                </button>
+             )}
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 mt-2">
           <div className="flex flex-col">
             <label htmlFor="width" className="text-xs font-medium text-gray-300 mb-1">Lebar (W) m</label>
             <input 

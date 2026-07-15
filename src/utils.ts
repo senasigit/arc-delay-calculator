@@ -1,20 +1,4 @@
-import type { SubwooferSettings, BoxCalculation, ArrayStats, SubwooferPreset } from './types';
-
-export const SUBWOOFER_PRESETS: SubwooferPreset[] = [
-  { id: 'Custom', name: 'Custom Dimension', width: 1.15, depth: 0.75 },
-  { id: 'SX110', name: 'Martin Audio SX110', width: 0.417, depth: 0.297 },
-  { id: 'SX210', name: 'Martin Audio SX210', width: 0.720, depth: 0.295 },
-  { id: 'SX112', name: 'Martin Audio SX112', width: 0.487, depth: 0.385 },
-  { id: 'SX212', name: 'Martin Audio SX212', width: 0.872, depth: 0.385 },
-  { id: 'SXF115', name: 'Martin Audio SXF115', width: 0.500, depth: 0.510 },
-  { id: 'SXC118', name: 'Martin Audio SXC118', width: 0.635, depth: 0.603 },
-  { id: 'SX118', name: 'Martin Audio SX118', width: 0.600, depth: 0.509 },
-  { id: 'SX218', name: 'Martin Audio SX218', width: 1.085, depth: 0.537 },
-  { id: 'SXH218', name: 'Martin Audio SXH218', width: 1.112, depth: 0.609 },
-  { id: 'MSX', name: 'Martin Audio MSX', width: 0.500, depth: 0.510 },
-  { id: 'DSX', name: 'Martin Audio DSX', width: 1.125, depth: 0.595 },
-  { id: 'MLX', name: 'Martin Audio MLX', width: 1.126, depth: 0.607 },
-];
+import type { SubwooferSettings, BoxCalculation, ArrayStats } from './types';
 
 export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalculation[], stats: ArrayStats } {
   const { count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay } = settings;
@@ -80,9 +64,8 @@ export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalc
       }
     }
     
-    // Front Box
     boxes.push({
-      index: i * 2, // reserve space for rear box
+      index: i * 2,
       label: label + (cardioid ? ' (Front)' : ''),
       x,
       y: 0,
@@ -93,28 +76,22 @@ export function calculateArcDelay(settings: SubwooferSettings): { boxes: BoxCalc
       totalCardioidDelayMs: delayMs + cardioidDelay
     });
     
-    // Rear Cardioid Box (Gradient setup: physically behind)
     if (cardioid) {
-      // Typically rear box is placed directly behind the front box
-      // Distance is physical depth. In our coordinate system, y goes positive backwards.
       const rearPhysicalY = orientation === 'Landscape' ? depth : width;
-      
       boxes.push({
         index: i * 2 + 1,
         label: label + ' (Rear)',
         x,
         y: rearPhysicalY, 
         virtualY,
-        delayMs: delayMs + cardioidDelay, // Total delay includes arc + cardioid delay
-        polarity: -1, // Polarity inversion for rejection
+        delayMs: delayMs + cardioidDelay, 
+        polarity: -1, 
         isRear: true
       });
     }
   }
   
-  // Sort from Left to Right for better table display
   boxes.sort((a, b) => a.x - b.x);
-  
   return { boxes, stats };
 }
 
@@ -138,14 +115,12 @@ export function calculate2DSpatialHeatmap(
 ) {
   const { speedOfSound, frequency, bandwidth, resolution, stack } = settings;
   
-  // Offscreen canvas logic: We calculate a lower resolution heatmap and return raw pixels
-  // HD resolution mapping
   const resMap = {
     'Low': 8,
-    'Medium': 5,
-    'High': 2 // Very high detail, more CPU
+    'Medium': 4,
+    'High': 2 
   };
-  const blockSize = resMap[resolution] || 5;
+  const blockSize = resMap[resolution] || 4;
 
   const cols = Math.ceil(widthPx / blockSize);
   const rows = Math.ceil(heightPx / blockSize);
@@ -155,10 +130,6 @@ export function calculate2DSpatialHeatmap(
   let minSpl = Infinity;
 
   const frequencies = getFrequenciesForBandwidth(frequency, bandwidth);
-  
-  // Stacking multiplier (n boxes stacked vertically adds coherent pressure)
-  // 2 boxes = +6dB pressure (pressure * 2)
-  // For SPL mapping we just multiply pressure by stack count.
   const stackMultiplier = Math.max(1, stack);
   
   for (let r = 0; r < rows; r++) {
@@ -178,7 +149,7 @@ export function calculate2DSpatialHeatmap(
         
         for (const box of boxes) {
           const dx = xMeters - box.x;
-          const dy = yMeters - box.y; // Physical Y offset matters for cardioid 
+          const dy = yMeters - box.y; 
           const distance = Math.sqrt(dx * dx + dy * dy);
           
           if (distance < 0.1) continue;
@@ -186,7 +157,11 @@ export function calculate2DSpatialHeatmap(
           const attenuation = 1 / distance;
           const delaySec = box.delayMs / 1000;
           
-          const phase = k * distance - (2 * Math.PI * freq * delaySec);
+          // Delaying a source increases the apparent distance the sound has to travel
+          // Effective distance = physical distance + (delay time * speed of sound)
+          const effectiveDistance = distance + (delaySec * speedOfSound);
+          const phase = k * effectiveDistance;
+          
           const pressure = attenuation * box.polarity * stackMultiplier;
           
           realSum += pressure * Math.cos(phase);
@@ -216,7 +191,6 @@ export function splToColor(spl: number, maxSpl: number, dynamicRange: number = 4
   if (normalized > 1) normalized = 1;
   
   const hue = (1 - normalized) * 240; 
-  // Add some visual punch to the SPL map
   const lightness = normalized > 0.05 ? 50 : normalized * 1000; 
   const alpha = normalized > 0.05 ? 0.9 : normalized * 15;
   
