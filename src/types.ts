@@ -3,6 +3,7 @@ export interface SubwooferSettings {
   preset: string; // 'Custom' or preset name
   orientation: 'Landscape' | 'Portrait';
   width: number;
+  height: number;
   depth: number;
   stack: number; // Tumpukan per posisi (1, 2, 3...)
   gap: number;
@@ -38,5 +39,6 @@ export interface SubwooferPreset {
   id: string;
   name: string;
   width: number;
+  height: number;
   depth: number;
 }

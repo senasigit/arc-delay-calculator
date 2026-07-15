@@ -30,6 +30,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
       id: `preset-${Date.now()}`,
       name: name.trim(),
       width: settings.width,
+      height: settings.height,
       depth: settings.depth
     };
 
@@ -66,6 +67,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           ...settings, 
           preset: value, 
           width: selected.width, 
+          height: selected.height,
           depth: selected.depth 
         });
       } else {
@@ -93,7 +95,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
         updatedSettings.centralGap = isNaN(numValue) ? 0 : numValue;
     }
 
-    if (name === 'width' || name === 'depth') {
+    if (name === 'width' || name === 'height' || name === 'depth') {
       updatedSettings.preset = 'Custom';
     }
     
@@ -174,7 +176,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mt-2">
+        <div className="grid grid-cols-3 gap-2 mt-2">
           <div className="flex flex-col">
             <label htmlFor="width" className="text-xs font-medium text-gray-300 mb-1">Lebar (W) m</label>
             <input 
@@ -185,7 +187,21 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               step="0.05"
               value={settings.width}
               onChange={handleChange}
-              className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+              className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-xs"
+            />
+          </div>
+
+          <div className="flex flex-col">
+            <label htmlFor="height" className="text-xs font-medium text-gray-300 mb-1">Tinggi (H) m</label>
+            <input 
+              id="height"
+              type="number" 
+              name="height"
+              min="0.1"
+              step="0.05"
+              value={settings.height}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-xs"
             />
           </div>
 
@@ -199,7 +215,7 @@ export function Sidebar({ settings, onChange, stats }: SidebarProps) {
               step="0.05"
               value={settings.depth}
               onChange={handleChange}
-              className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
+              className="bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-xs"
             />
           </div>
         </div>

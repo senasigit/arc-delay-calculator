@@ -11,6 +11,7 @@ function App() {
     preset: 'Custom',
     orientation: 'Landscape',
     width: 1.15,
+    height: 0.55,
     depth: 0.75,
     stack: 1,
     gap: 0.60,
