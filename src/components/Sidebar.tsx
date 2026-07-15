@@ -87,7 +87,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
       return;
     }
 
-    if (name === 'orientation' || name === 'bandwidth' || name === 'resolution') {
+    if (name === 'orientation' || name === 'bandwidth' || name === 'resolution' || name === 'setupType') {
       let dim = 0;
       if (name === 'orientation') {
           dim = value === 'Landscape' ? settings.width : settings.depth;
@@ -167,7 +167,43 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
 
       <div className="flex-1 px-6 space-y-4 pb-6 overflow-y-auto">
         <div className="flex flex-col">
-          <label htmlFor="count" className="text-sm font-medium text-gray-300 mb-1">Jumlah Sub Titik Fisik</label>
+          <label htmlFor="setupType" className="text-sm font-medium text-gray-300 mb-1">Tipe Setup Array</label>
+          <select 
+            id="setupType"
+            name="setupType"
+            value={settings.setupType}
+            onChange={handleChange}
+            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm font-bold text-accent"
+          >
+            <option value="Arc Array">Arc Array (Curved)</option>
+            <option value="L/R">L/R (Left/Right)</option>
+            <option value="End-Fire">End-Fire Array</option>
+            <option value="Cardioid L/R">Cardioid L/R</option>
+            <option value="End-Fire L/R">End-Fire L/R</option>
+            <option value="Gradient Array">Gradient Array</option>
+          </select>
+        </div>
+        
+        {settings.setupType.includes('L/R') && (
+          <div className="flex flex-col">
+            <label htmlFor="stageWidth" className="text-sm font-medium text-gray-300 mb-1">Lebar Panggung (m)</label>
+            <input 
+              id="stageWidth"
+              type="number" 
+              name="stageWidth"
+              min="1"
+              step="0.5"
+              value={settings.stageWidth}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors"
+            />
+          </div>
+        )}
+
+        <div className="flex flex-col">
+          <label htmlFor="count" className="text-sm font-medium text-gray-300 mb-1">
+            {settings.setupType.includes('L/R') ? 'Total Jumlah Box (Kiri + Kanan)' : 'Total Jumlah Box (Titik Fisik)'}
+          </label>
           <input 
             id="count"
             type="number" 
@@ -294,7 +330,9 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
 
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col">
-            <label htmlFor="gap" className="text-xs font-medium text-gray-300 mb-1" title="Jarak space antar box (edge-to-edge)">Sub Gap m</label>
+            <label htmlFor="gap" className="text-xs font-medium text-gray-300 mb-1" title="Jarak space antar box (edge-to-edge)">
+              {settings.setupType.includes('End-Fire') ? 'Jarak Baris (Gap) m' : 'Sub Gap m'}
+            </label>
             <input 
               id="gap"
               type="number" 
@@ -317,25 +355,27 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
               step="0.05"
               value={settings.centralGap}
               onChange={handleChange}
-              disabled={settings.count % 2 !== 0}
-              className={`bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm ${settings.count % 2 !== 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+              disabled={settings.count % 2 !== 0 || settings.setupType.includes('L/R')}
+              className={`bg-[#0f1115] border border-dark-border rounded px-2 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm ${(settings.count % 2 !== 0 || settings.setupType.includes('L/R')) ? 'opacity-50 cursor-not-allowed' : ''}`}
             />
           </div>
         </div>
 
-        <div className="flex flex-col">
-          <label htmlFor="theta" className="text-sm font-medium text-gray-300 mb-1">Sudut Cakupan (Theta) °</label>
-          <input 
-            id="theta"
-            type="number" 
-            name="theta"
-            min="0"
-            max="180"
-            value={settings.theta}
-            onChange={handleChange}
-            className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors"
-          />
-        </div>
+        {!settings.setupType.includes('L/R') && !settings.setupType.includes('End-Fire') && settings.setupType !== 'Gradient Array' && (
+          <div className="flex flex-col">
+            <label htmlFor="theta" className="text-sm font-medium text-gray-300 mb-1">Sudut Cakupan (Theta) °</label>
+            <input 
+              id="theta"
+              type="number" 
+              name="theta"
+              min="0"
+              max="180"
+              value={settings.theta}
+              onChange={handleChange}
+              className="bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors"
+            />
+          </div>
+        )}
 
         <div className="flex flex-col border-t border-dark-border pt-4 mt-2">
           <div className="flex items-center mb-3">

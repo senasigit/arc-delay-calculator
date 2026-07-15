@@ -154,7 +154,7 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
       
       groups.forEach(group => {
         const px = group.x * scale;
-        const py = 0; // Tampilan 2D selalu ditumpuk di koordinat fisik Y (0)
+        const py = group.y * scale;
         
         const isHovered = hoveredGroup?.positionId === group.positionId;
         const isMuted = group.muted;
@@ -271,7 +271,7 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
     
     const hovered = groups.find(group => {
        const px = cx + offset.x + group.x * scale;
-       const py = cy + offset.y + 0;
+       const py = cy + offset.y + group.y * scale;
        
        const left = px - boxW / 2;
        const right = px + boxW / 2;

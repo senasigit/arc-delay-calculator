@@ -1,4 +1,8 @@
+export type SetupType = 'Arc Array' | 'L/R' | 'End-Fire' | 'Cardioid L/R' | 'End-Fire L/R' | 'Gradient Array';
+
 export interface SubwooferSettings {
+  setupType: SetupType;
+  stageWidth: number;
   count: number;
   preset: string; 
   orientation: 'Landscape' | 'Portrait';
@@ -33,6 +37,7 @@ export interface BoxGroup {
   positionId: number; 
   label: string;
   x: number; 
+  y: number;
   virtualY: number; 
   baseDelayMs: number; 
   muted: boolean;

@@ -7,6 +7,8 @@ import { calculateArcDelay } from './utils';
 
 function App() {
   const [settings, setSettings] = useState<SubwooferSettings>({
+    setupType: 'Arc Array',
+    stageWidth: 10,
     count: 7,
     preset: 'Custom',
     orientation: 'Landscape',
