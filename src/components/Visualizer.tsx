@@ -13,6 +13,9 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
   
   const [hoveredGroup, setHoveredGroup] = useState<BoxGroup | null>(null);
+  
+  // Touch state
+  const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
 
   const [zoomScale, setZoomScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -166,28 +169,7 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
         ctx.fillRect(renderX, renderY, boxW, boxH);
         ctx.strokeRect(renderX, renderY, boxW, boxH);
         
-        ctx.fillStyle = isMuted ? '#4b5563' : '#ef4444'; // Red dot untuk indikasi center depan (tampak atas)
-        ctx.beginPath();
-        ctx.arc(px, renderY + boxH * 0.2, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (settings.stack > 0) {
-           ctx.fillStyle = isMuted ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.9)';
-           ctx.font = 'bold 11px Inter, sans-serif';
-           ctx.textAlign = 'center';
-           ctx.textBaseline = 'middle';
-           
-           const frontCount = group.boxes.filter(b => !b.isRear).length;
-           const rearCount = group.boxes.filter(b => b.isRear).length;
-           
-           if (settings.cardioid && rearCount > 0) {
-               ctx.fillText(`\u2191 ${frontCount}`, px, py - 5);
-               ctx.fillStyle = isMuted ? 'rgba(167, 139, 250, 0.3)' : '#a78bfa'; // Purple for rear
-               ctx.fillText(`\u2193 ${rearCount}`, px, py + 10);
-           } else {
-               ctx.fillText(`x${settings.stack}`, px, py);
-           }
-        }
+        // Removed Red Dot and 3D Stack text to keep it purely 2D map
         
         if (isMuted) {
            ctx.strokeStyle = '#ef4444';
@@ -302,6 +284,39 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
     setHoveredGroup(hovered || null);
   };
 
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 1) {
+      setIsDragging(true);
+      setLastMousePos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+    } else if (e.touches.length === 2) {
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      setLastTouchDistance(dist);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 1 && isDragging) {
+      const dx = e.touches[0].clientX - lastMousePos.x;
+      const dy = e.touches[0].clientY - lastMousePos.y;
+      setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      setLastMousePos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+    } else if (e.touches.length === 2 && lastTouchDistance !== null) {
+      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      const delta = dist - lastTouchDistance;
+      setLastTouchDistance(dist);
+      
+      let newScale = zoomScale + delta * 0.01;
+      if (newScale < 0.2) newScale = 0.2;
+      if (newScale > 10) newScale = 10;
+      setZoomScale(newScale);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+    setLastTouchDistance(null);
+  };
+
   return (
     <div ref={containerRef} className="flex-1 relative bg-[#0a0c10] print:bg-white w-full h-full overflow-hidden">
       <canvas 
@@ -311,7 +326,11 @@ export function Visualizer({ settings, groups }: VisualizerProps) {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        className="block cursor-grab active:cursor-grabbing"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+        className="block cursor-grab active:cursor-grabbing touch-none"
       />
       
       <div 

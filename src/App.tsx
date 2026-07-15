@@ -66,12 +66,12 @@ function App() {
       {/* Mobile Top Nav / Tabs */}
       <div className="md:hidden flex bg-[#0f1115] border-b border-gray-800 p-2 space-x-2 print:hidden z-20 shadow-md">
          <button onClick={() => setActiveTab('setup')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>⚙️ Setup</button>
-         <button onClick={() => setActiveTab('map')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>🗺️ 3D Map</button>
+         <button onClick={() => setActiveTab('map')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>🗺️ 2D Map</button>
          <button onClick={() => setActiveTab('dsp')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-accent text-white' : 'bg-[#1a1d24] text-gray-400'}`}>🎛️ DSP</button>
       </div>
 
       {/* Sidebar */}
-      <div className={`${activeTab === 'setup' ? 'block' : 'hidden'} md:block h-full md:w-80 w-full flex-shrink-0 print:hidden`}>
+      <div className={`${activeTab === 'setup' ? 'block' : 'hidden print:block'} md:block h-full md:w-80 w-full flex-shrink-0 print:hidden`}>
         <Sidebar 
           settings={settings} 
           onChange={setSettings} 
@@ -82,7 +82,7 @@ function App() {
       </div>
       
       {/* Area Utama */}
-      <div className={`${activeTab === 'setup' ? 'hidden' : 'flex'} md:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
+      <div className={`${activeTab === 'setup' ? 'hidden print:flex' : 'flex'} md:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
         
         {/* HEADER LAPORAN (HANYA TAMPIL SAAT DIPRINT ATAU DILIHAT DI PDF) */}
         <div className="hidden print:block mb-6 pt-4 border-b-2 border-gray-800 pb-4">
@@ -102,12 +102,12 @@ function App() {
         {/* Area Map & Tabel */}
         <div className="flex-1 flex flex-col md:flex-row print:block print:w-full h-full overflow-hidden">
           {/* Tengah: Visualizer Dinamis */}
-          <div className={`${activeTab === 'map' ? 'flex' : 'hidden'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300`}>
+          <div className={`${activeTab === 'map' ? 'flex' : 'hidden print:flex'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300`}>
             <Visualizer settings={settings} groups={groups} />
           </div>
 
           {/* Kanan: Tabel Data */}
-          <div className={`${activeTab === 'dsp' ? 'flex' : 'hidden'} md:flex flex-col md:w-80 w-full print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0`}>
+          <div className={`${activeTab === 'dsp' ? 'flex' : 'hidden print:flex'} md:flex flex-col md:w-80 w-full print:w-full print:h-auto print:border-none print:shadow-none h-full flex-shrink-0`}>
             <DataTable 
               groups={groups} 
               cardioidEnabled={settings.cardioid}

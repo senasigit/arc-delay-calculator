@@ -10,7 +10,7 @@ interface DataTableProps {
 export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardioid }: DataTableProps) {
   
   return (
-    <div className="w-80 h-full bg-dark-panel border-l border-dark-border flex flex-col overflow-y-auto">
+    <div className="w-full md:w-80 h-full bg-dark-panel border-l border-dark-border flex flex-col overflow-y-auto">
       <div className="p-4 border-b border-dark-border sticky top-0 bg-dark-panel z-10 print:static print:border-none print:p-0 print:mb-4">
         <h2 className="text-lg font-bold text-white print:text-black">DSP Delay & Setup Table</h2>
         <p className="text-xs text-gray-400 print:text-gray-600">Instruksi Fisik dan Kalkulasi Delay (ms)</p>
