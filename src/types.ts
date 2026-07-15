@@ -1,8 +1,10 @@
 export interface SubwooferSettings {
   count: number;
+  preset: string; // 'Custom' or preset name
   orientation: 'Landscape' | 'Portrait';
   width: number;
   depth: number;
+  stack: number; // Tumpukan per posisi (1, 2, 3...)
   gap: number;
   centralGap: number;
   theta: number; // in degrees
@@ -18,13 +20,23 @@ export interface BoxCalculation {
   index: number;
   label: string;
   x: number; // Physical X position
-  y: number; // Virtual Y displacement
-  delayMs: number; // Arc delay
-  totalCardioidDelayMs: number; // Arc delay + cardioid delay
+  y: number; // Physical Y displacement (for cardioid placement)
+  virtualY: number; // Virtual Y displacement from arc delay
+  delayMs: number; // Total Delay applied to this box
+  polarity: 1 | -1; // 1 for front, -1 for rear cardioid
+  isRear: boolean;
+  totalCardioidDelayMs?: number; // Info column
 }
 
 export interface ArrayStats {
   acousticCenterSpacing: number;
   totalArrayLength: number;
   upperFreqLimit: number;
+}
+
+export interface SubwooferPreset {
+  id: string;
+  name: string;
+  width: number;
+  depth: number;
 }

@@ -8,9 +8,11 @@ import { calculateArcDelay } from './utils';
 function App() {
   const [settings, setSettings] = useState<SubwooferSettings>({
     count: 6,
+    preset: 'Custom',
     orientation: 'Landscape',
     width: 1.15,
     depth: 0.75,
+    stack: 1,
     gap: 0.60,
     centralGap: 0.60,
     theta: 90,

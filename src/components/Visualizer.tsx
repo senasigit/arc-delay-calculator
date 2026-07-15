@@ -11,6 +11,7 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  
   const [hoveredBox, setHoveredBox] = useState<BoxCalculation | null>(null);
 
   // Panning and Zooming State
@@ -18,14 +19,25 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  
+  // Create an offscreen canvas for rendering smooth HD Heatmap
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
+    if (!offscreenCanvasRef.current) {
+      offscreenCanvasRef.current = document.createElement('canvas');
+    }
+    
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
+    // Enable image smoothing for the heatmap
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     const resizeCanvas = () => {
       canvas.width = container.clientWidth;
@@ -48,13 +60,12 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       const baseScaleX = (width - padding * 2) / Math.max(arrayLength, 1);
       const baseScaleY = (height - padding * 2) / maxPlotRadius;
       
-      // The final scale is the base scale multiplied by the user's zoom level
       const scale = Math.min(baseScaleX, baseScaleY, 150) * zoomScale; 
       
       const cx = width / 2;
       const cy = height / 2; 
 
-      // 1. Gambar Heatmap 2D 360 derajat
+      // 1. Gambar Heatmap 2D 360 derajat (HD Smoothing)
       if (calculations.length > 0) {
         const mapData = calculate2DSpatialHeatmap(
           settings, 
@@ -68,19 +79,34 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
           offset.y
         );
         
-        for (let r = 0; r < mapData.rows; r++) {
-          for (let c = 0; c < mapData.cols; c++) {
-            const spl = mapData.heatmap[r * mapData.cols + c];
-            const color = splToColor(spl, mapData.maxSpl, 35); 
-            
-            ctx.fillStyle = color;
-            ctx.fillRect(c * mapData.blockSize, r * mapData.blockSize, mapData.blockSize, mapData.blockSize);
-          }
+        const offCtx = offscreenCanvasRef.current!.getContext('2d');
+        if (offCtx) {
+           offscreenCanvasRef.current!.width = mapData.cols;
+           offscreenCanvasRef.current!.height = mapData.rows;
+           
+           for (let r = 0; r < mapData.rows; r++) {
+             for (let c = 0; c < mapData.cols; c++) {
+               const spl = mapData.heatmap[r * mapData.cols + c];
+               const colorStr = splToColor(spl, mapData.maxSpl, 35);
+               
+               // Parse HSLA back to RGBA to put in ImageData is tricky.
+               // It's faster to just fillRect on the offscreen canvas.
+               offCtx.fillStyle = colorStr;
+               offCtx.fillRect(c, r, 1, 1);
+             }
+           }
+           
+           // Draw offscreen canvas to main canvas with scaling (smooths it out)
+           ctx.drawImage(
+             offscreenCanvasRef.current!, 
+             0, 0, mapData.cols, mapData.rows, 
+             0, 0, mapData.cols * mapData.blockSize, mapData.rows * mapData.blockSize
+           );
         }
       }
 
-      // 2. Gambar Grid (Skala 1 meter)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+      // 2. Gambar Sumbu Koordinat dan Grid (Skala 1 meter)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
       ctx.lineWidth = 1;
       const gridSize = 1 * scale; 
       
@@ -88,40 +114,79 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       const startY = (cy + offset.y) % gridSize;
 
       ctx.beginPath();
+      // Y Grid
       for (let x = startX; x < width; x += gridSize) {
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
       }
+      // X Grid
       for (let y = startY; y < height; y += gridSize) {
         ctx.moveTo(0, y);
         ctx.lineTo(width, y);
       }
       ctx.stroke();
 
-      // Titik tengah origin (0,0) meter
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      // Sumbu X/Y Utama (0,0) meter
+      const originX = cx + offset.x;
+      const originY = cy + offset.y;
+      
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
       ctx.beginPath();
-      ctx.moveTo(cx + offset.x, 0);
-      ctx.lineTo(cx + offset.x, height);
-      ctx.moveTo(0, cy + offset.y);
-      ctx.lineTo(width, cy + offset.y);
+      ctx.moveTo(originX, 0);
+      ctx.lineTo(originX, height);
+      ctx.moveTo(0, originY);
+      ctx.lineTo(width, originY);
       ctx.stroke();
+      
+      // Meter Tick marks pada Sumbu Utama
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.font = '10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      
+      // X Ticks
+      for (let x = originX % gridSize; x < width; x += gridSize) {
+         if (Math.abs(x - originX) < 1) continue; // Skip 0
+         const meterX = (x - originX) / scale;
+         ctx.fillText(`${meterX.toFixed(0)}m`, x, originY + 5);
+         
+         ctx.beginPath();
+         ctx.moveTo(x, originY - 3);
+         ctx.lineTo(x, originY + 3);
+         ctx.stroke();
+      }
+      
+      // Y Ticks
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (let y = originY % gridSize; y < height; y += gridSize) {
+         if (Math.abs(y - originY) < 1) continue; // Skip 0
+         const meterY = (y - originY) / scale;
+         ctx.fillText(`${meterY.toFixed(0)}m`, originX - 5, y);
+         
+         ctx.beginPath();
+         ctx.moveTo(originX - 3, y);
+         ctx.lineTo(originX + 3, y);
+         ctx.stroke();
+      }
 
-      // 3. Gambar Fisik Subwoofer
+      // 3. Gambar Fisik Subwoofer (Front & Rear)
       ctx.save();
-      ctx.translate(cx + offset.x, cy + offset.y);
+      ctx.translate(originX, originY);
       
       const boxW = physicalDimensionX * scale;
       const boxH = physicalDimensionY * scale;
       
       calculations.forEach((box) => {
         const px = box.x * scale;
-        const py = 0; 
+        // box.y physical displacement (mostly for cardioid rear)
+        const py = box.y * scale; 
         
         const isHovered = hoveredBox?.index === box.index;
         
-        ctx.fillStyle = isHovered ? '#60a5fa' : '#1f2937'; 
-        ctx.strokeStyle = isHovered ? '#ffffff' : '#111827'; 
+        // Warna berbeda untuk Cardioid Rear box
+        ctx.fillStyle = isHovered ? '#60a5fa' : (box.isRear ? '#4c1d95' : '#1f2937'); 
+        ctx.strokeStyle = isHovered ? '#ffffff' : (box.isRear ? '#8b5cf6' : '#111827'); 
         ctx.lineWidth = 2;
         
         const renderX = px - boxW / 2;
@@ -130,21 +195,42 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
         ctx.fillRect(renderX, renderY, boxW, boxH);
         ctx.strokeRect(renderX, renderY, boxW, boxH);
         
-        ctx.fillStyle = '#ef4444'; 
+        // Titik pusat akustik (merah/ungu)
+        ctx.fillStyle = box.isRear ? '#d8b4fe' : '#ef4444'; 
         ctx.beginPath();
         ctx.arc(px, py, 3, 0, Math.PI * 2);
         ctx.fill();
+        
+        // Gambar indikator Stack jika ditumpuk
+        if (settings.stack > 1 && !box.isRear) {
+           ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+           ctx.font = '10px Inter, sans-serif';
+           ctx.textAlign = 'center';
+           ctx.textBaseline = 'middle';
+           ctx.fillText(`x${settings.stack}`, px, py);
+        }
       });
       ctx.restore();
       
-      // Indikator Skala & Info Frekuensi
+      // Indikator Info Overlay (Pindah Kiri Atas)
+      ctx.fillStyle = 'rgba(15, 17, 21, 0.8)';
+      ctx.fillRect(10, 10, 240, 75);
+      ctx.strokeStyle = '#2a2e37';
+      ctx.strokeRect(10, 10, 240, 75);
+      
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = 'white'; 
-      ctx.font = '12px Inter, sans-serif';
-      ctx.fillText(`Skala Grid: 1m | Zoom: ${(zoomScale * 100).toFixed(0)}%`, 15, 25);
+      ctx.font = 'bold 12px Inter, sans-serif';
+      ctx.fillText(`Zoom: ${(zoomScale * 100).toFixed(0)}%`, 20, 30);
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.fillText(`Area: ${((width / scale)).toFixed(1)}m x ${((height / scale)).toFixed(1)}m`, 110, 30);
+      
       ctx.fillStyle = '#fca5a5'; 
-      ctx.fillText(`Heatmap: ${settings.bandwidth} @ ${settings.frequency}Hz (${settings.resolution})`, 15, 45);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.fillText('Atas = Depan (Audience), Bawah = Belakang (Stage)', 15, 65);
+      ctx.fillText(`${settings.bandwidth} Map @ ${settings.frequency}Hz`, 20, 50);
+      ctx.fillStyle = '#9ca3af';
+      ctx.fillText('Depan (Atas) \u2191 | \u2193 Belakang', 20, 70);
     };
 
     draw();
@@ -153,13 +239,12 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     return () => window.removeEventListener('resize', resizeCanvas);
   }, [settings, calculations, hoveredBox, zoomScale, offset]);
 
-  // Handle Mouse Events for Pan and Zoom
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const zoomSensitivity = 0.001;
     let newScale = zoomScale - e.deltaY * zoomSensitivity;
     if (newScale < 0.2) newScale = 0.2;
-    if (newScale > 5) newScale = 5;
+    if (newScale > 10) newScale = 10;
     setZoomScale(newScale);
   };
 
@@ -176,7 +261,6 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    // Handle Panning
     if (isDragging) {
       const dx = e.clientX - lastMousePos.x;
       const dy = e.clientY - lastMousePos.y;
@@ -185,10 +269,7 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       return;
     }
 
-    // Handle Hover detection
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
     
     if (tooltipRef.current) {
       tooltipRef.current.style.left = `${e.clientX + 15}px`;
@@ -209,9 +290,12 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
     const boxW = physicalDimensionX * scale;
     const boxH = physicalDimensionY * scale;
     
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
     const hovered = calculations.find(box => {
        const px = cx + offset.x + box.x * scale;
-       const py = cy + offset.y; 
+       const py = cy + offset.y + box.y * scale; 
        
        const left = px - boxW / 2;
        const right = px + boxW / 2;
@@ -237,19 +321,24 @@ export function Visualizer({ settings, calculations }: VisualizerProps) {
       />
       
       {/* Tooltip */}
-      {hoveredBox && !isDragging && (
-        <div 
-          ref={tooltipRef}
-          className="fixed pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20"
-        >
-          <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredBox.label}</p>
-          <p className="text-gray-300">Posisi X: <span className="text-white">{hoveredBox.x > 0 ? '+' : ''}{hoveredBox.x.toFixed(2)} m</span></p>
-          <p className="text-accent font-bold mt-1 text-base">{hoveredBox.delayMs.toFixed(2)} ms</p>
-          {settings.cardioid && (
-            <p className="text-green-400 font-bold mt-1 text-xs">Total Cardioid: {hoveredBox.totalCardioidDelayMs.toFixed(2)} ms</p>
-          )}
-        </div>
-      )}
+      <div 
+        ref={tooltipRef}
+        className={`fixed pointer-events-none bg-dark-panel border border-dark-border text-white text-sm rounded px-3 py-2 shadow-lg z-20 transition-opacity duration-150 ${hoveredBox && !isDragging ? 'opacity-100' : 'opacity-0'}`}
+      >
+        {hoveredBox && (
+          <>
+            <p className="font-bold border-b border-dark-border pb-1 mb-1">{hoveredBox.label}</p>
+            <p className="text-gray-300 text-xs">X: {hoveredBox.x > 0 ? '+' : ''}{hoveredBox.x.toFixed(2)} m, Y: {hoveredBox.y.toFixed(2)} m</p>
+            <p className="text-accent font-bold mt-1 text-base">{hoveredBox.delayMs.toFixed(2)} ms</p>
+            {settings.cardioid && hoveredBox.isRear && (
+              <p className="text-purple-400 font-bold mt-1 text-xs">Inverted Polarity</p>
+            )}
+            {settings.cardioid && (
+              <p className="text-green-400 font-bold mt-1 text-xs">Total: {hoveredBox.totalCardioidDelayMs?.toFixed(2)} ms</p>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
