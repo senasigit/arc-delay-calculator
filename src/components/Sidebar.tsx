@@ -92,7 +92,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
 
     let parsedValue: string | number = value;
     if (type === 'number') {
-      parsedValue = parseFloat(value) || 0;
+      parsedValue = value === '' ? '' : (parseFloat(value) || 0);
     }
 
     const newSettings = { ...settings, [name]: parsedValue };
