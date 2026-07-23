@@ -4,6 +4,7 @@ import { Visualizer } from './components/Visualizer';
 import { DataTable } from './components/DataTable';
 import { ProjectModal } from './components/ProjectModal';
 import { AreaEditor } from './components/AreaEditor';
+import { AudioUtilities } from './components/AudioUtilities';
 import type { SubwooferSettings, ReportInfo, ProjectData, VenueArea } from './types';
 import { calculateArcDelay } from './utils';
 import { db } from './firebase';
@@ -16,7 +17,7 @@ function App() {
     count: '',
     preset: 'Custom',
     orientation: 'Landscape',
-    arrayFacing: 'Down',
+    arrayFacing: 'Right',
     width: '',
     height: '',
     depth: '',
@@ -51,11 +52,12 @@ function App() {
 
   const [mutedPositions, setMutedPositions] = useState<Set<number>>(new Set());
   const [disabledCardioidPositions, setDisabledCardioidPositions] = useState<Set<number>>(new Set());
-  const [activeTab, setActiveTab] = useState<'setup' | 'map' | 'dsp'>('setup');
+  const [activeTab, setActiveTab] = useState<'setup' | 'map' | 'dsp' | 'utility'>('setup');
   const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
   const [areas, setAreas] = useState<VenueArea[]>([]);
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
   const [showAreaEditor, setShowAreaEditor] = useState(false);
+  const [showUtility, setShowUtility] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
 
@@ -130,10 +132,11 @@ function App() {
       <div className="flex w-screen h-screen overflow-hidden text-yellow-400 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-zinc-950 via-black to-zinc-900 print:block print:h-auto print:bg-white print:text-black flex-col lg:flex-row">
       
       {/* Mobile Top Nav / Tabs */}
-      <div className="lg:hidden flex bg-slate-900/50 backdrop-blur-md border-b border-slate-700 p-2 space-x-2 print:hidden z-20 shadow-md">
-         <button onClick={() => setActiveTab('setup')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>⚙️ Setup</button>
-         <button onClick={() => setActiveTab('map')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🗺️ 2D Map</button>
-         <button onClick={() => setActiveTab('dsp')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🎛️ DSP</button>
+      <div className="lg:hidden flex bg-slate-900/50 backdrop-blur-md border-b border-slate-700 p-2 space-x-1 print:hidden z-20 shadow-md overflow-x-auto">
+         <button onClick={() => {setActiveTab('setup'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>⚙️ Setup</button>
+         <button onClick={() => {setActiveTab('map'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🗺️ Map</button>
+         <button onClick={() => {setActiveTab('dsp'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🎛️ DSP</button>
+         <button onClick={() => {setActiveTab('utility'); setShowUtility(true);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'utility' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🛠️ Utility</button>
       </div>
 
       {/* Sidebar Kiri */}
@@ -218,17 +221,37 @@ function App() {
               onUpdateArea={(id, updates) => {
                  setAreas(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
               }}
+              onChangeSettings={setSettings}
             />
             
-            {!showAreaEditor && (
-              <button 
-                onClick={() => setShowAreaEditor(true)}
-                className="absolute top-4 right-4 bg-gradient-to-r from-yellow-300 to-amber-500 hover:from-purple-500 hover:to-indigo-500 border border-yellow-500/50 text-white px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(168,85,247,0.5)] text-xs font-bold transition-all z-20 print:hidden"
-              >
-                🗺️ Area Manager
-              </button>
+            {!showAreaEditor && !showUtility && (
+              <div className="absolute top-4 right-4 flex gap-2 z-20 print:hidden">
+                <button 
+                  onClick={() => setShowUtility(true)}
+                  className="bg-zinc-800 hover:bg-zinc-700 border border-gray-600 text-white px-3 py-2 rounded-lg shadow-lg text-xs font-bold transition-all"
+                >
+                  🛠️ Utility
+                </button>
+                <button 
+                  onClick={() => setShowAreaEditor(true)}
+                  className="bg-gradient-to-r from-yellow-300 to-amber-500 hover:from-purple-500 hover:to-indigo-500 border border-yellow-500/50 text-white px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(168,85,247,0.5)] text-xs font-bold transition-all"
+                >
+                  🗺️ Area Manager
+                </button>
+              </div>
             )}
             
+            {showUtility && (
+              <div className="absolute inset-0 z-30 flex flex-col bg-zinc-950">
+                <div className="absolute top-4 right-4 z-40 hidden lg:block">
+                  <button onClick={() => setShowUtility(false)} className="bg-red-600/80 hover:bg-red-500 text-white px-3 py-1.5 rounded text-sm font-bold shadow-lg backdrop-blur">
+                    ✕ Close Utilities
+                  </button>
+                </div>
+                <AudioUtilities settings={settings} />
+              </div>
+            )}
+
             {showAreaEditor && (
               <AreaEditor 
                 areas={areas}
@@ -253,6 +276,7 @@ function App() {
           </div>
         </div>
       </div>
+      
     </div>
     </>
   );

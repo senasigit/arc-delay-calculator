@@ -13,7 +13,30 @@ export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardi
     <div className="w-full md:w-80 h-full bg-white/5 backdrop-blur-md border-l border-white/10 flex flex-col overflow-y-auto">
       <div className="p-4 border-b border-white/10 sticky top-0 bg-black/20 backdrop-blur-md z-10 print:static print:border-none print:p-0 print:mb-4 print:bg-transparent">
         <h2 className="text-lg font-bold text-white print:text-black">DSP Delay & Setup Table</h2>
-        <p className="text-xs text-yellow-400 print:text-gray-600">Instruksi Fisik dan Kalkulasi Delay (ms)</p>
+        <p className="text-xs text-yellow-400 print:text-gray-600 mb-3">Instruksi Fisik dan Kalkulasi Delay (ms)</p>
+        
+        {groups.length > 0 && (
+          <div className="bg-zinc-900/80 border border-yellow-500/30 rounded-lg p-3 grid grid-cols-3 gap-2 text-center shadow-inner">
+            <div className="flex flex-col">
+               <span className="text-[10px] text-yellow-500 uppercase tracking-wider">Total Box</span>
+               <span className="text-xl font-bold text-white">
+                 {groups.reduce((sum, group) => sum + group.boxes.length, 0)}
+               </span>
+            </div>
+            <div className="flex flex-col border-x border-white/10">
+               <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Front</span>
+               <span className="text-xl font-bold text-zinc-200">
+                 {groups.reduce((sum, group) => sum + group.boxes.filter(b => !b.isRear).length, 0)}
+               </span>
+            </div>
+            <div className="flex flex-col">
+               <span className="text-[10px] text-amber-500 uppercase tracking-wider">Rear</span>
+               <span className="text-xl font-bold text-amber-300">
+                 {groups.reduce((sum, group) => sum + group.boxes.filter(b => b.isRear).length, 0)}
+               </span>
+            </div>
+          </div>
+        )}
       </div>
       
       <div className="flex-1 p-4 print:p-0">

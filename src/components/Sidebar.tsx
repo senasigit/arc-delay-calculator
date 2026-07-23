@@ -63,6 +63,47 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
     }
   };
 
+  const renderLambdaHelper = (name: keyof typeof settings, val: string | number, colorClass: string = 'text-blue-300/60', isTime: boolean = false) => {
+    const f = Number(settings.targetFrequency) || 63;
+    const c = Number(settings.speedOfSound) || 343.0;
+    const lambda = c / f;
+    const periodMs = (1 / f) * 1000;
+    
+    const baseVal = isTime ? periodMs : lambda;
+    const d = Number(val);
+    const fraction = d ? (d / baseVal) : 0;
+    
+    const setFraction = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const frac = Number(e.target.value);
+      if (!frac || isNaN(frac)) return;
+      const newVal = (baseVal * frac).toFixed(isTime ? 1 : 2);
+      onChange({ ...settings, [name]: newVal });
+    };
+
+    const isQuarter = Math.abs(fraction - 0.25) < 0.02;
+    const isHalf = Math.abs(fraction - 0.5) < 0.02;
+    const isTwoThird = Math.abs(fraction - 0.6667) < 0.02;
+    const isFull = Math.abs(fraction - 1.0) < 0.02;
+
+    let selectValue = "custom";
+    if (isQuarter) selectValue = "0.25";
+    else if (isHalf) selectValue = "0.5";
+    else if (isTwoThird) selectValue = "0.6667";
+    else if (isFull) selectValue = "1";
+
+    return (
+      <div className="flex items-center mt-1 w-full">
+        <select value={selectValue} onChange={setFraction} className={`w-full bg-black/20 border border-white/5 rounded px-1 py-0.5 outline-none cursor-pointer text-[9px] ${colorClass} font-bold opacity-80 hover:opacity-100 transition-opacity`}>
+          {selectValue === 'custom' && <option value="custom" className="bg-zinc-900">≈ {fraction.toFixed(2)} λ @ {f}Hz</option>}
+          <option value="0.25" className="bg-zinc-900 text-white">1/4 λ @ {f}Hz</option>
+          <option value="0.5" className="bg-zinc-900 text-white">1/2 λ @ {f}Hz</option>
+          <option value="0.6667" className="bg-zinc-900 text-white">2/3 λ @ {f}Hz</option>
+          <option value="1" className="bg-zinc-900 text-white">1 λ @ {f}Hz</option>
+        </select>
+      </div>
+    );
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     
@@ -97,21 +138,41 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
 
     const newSettings = { ...settings, [name]: parsedValue };
 
+    if (name === 'temperature' || name === 'humidity') {
+       const t = name === 'temperature' ? Number(parsedValue) : Number(settings.temperature);
+       const h = name === 'humidity' ? Number(parsedValue) : Number(settings.humidity);
+       
+       // Formula Sengpiel / empiris: c = 331.3 + (0.606 * T) + (0.0124 * H)
+       const c = 331.3 + (0.606 * t) + (0.0124 * h);
+       newSettings.speedOfSound = parseFloat(c.toFixed(2));
+    }
+
     if (name === 'gap' || name === 'width' || name === 'depth' || name === 'orientation') {
       const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
       newSettings.centralGap = Number(newSettings.gap) + dim;
+      if (name === 'gap') newSettings.targetFrequency = '';
     }
 
     if (name === 'centralGap') {
       const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
       newSettings.gap = Math.max(0, Number(newSettings.centralGap) - dim);
       newSettings.centralGap = newSettings.gap + dim;
+      newSettings.targetFrequency = '';
     }
     
     if (name === 'targetFrequency' && value) {
       const freq = Number(value);
       if (freq > 0) {
-        newSettings.centralGap = (Number(settings.speedOfSound) / freq) / 4;
+        newSettings.centralGap = (Number(newSettings.speedOfSound) / freq) / 4;
+        const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
+        newSettings.gap = Math.max(0, newSettings.centralGap - dim);
+        newSettings.centralGap = newSettings.gap + dim;
+      }
+    } else if ((name === 'speedOfSound' || name === 'temperature' || name === 'humidity') && newSettings.targetFrequency) {
+      // If speed of sound changes (manually or via temp/hum), update gap if locked to targetFrequency
+      const freq = Number(newSettings.targetFrequency);
+      if (freq > 0) {
+        newSettings.centralGap = (Number(newSettings.speedOfSound) / freq) / 4;
         const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
         newSettings.gap = Math.max(0, newSettings.centralGap - dim);
         newSettings.centralGap = newSettings.gap + dim;
@@ -275,21 +336,17 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
                 <div className="flex flex-col">
                   <label htmlFor="rowSpacing" className="text-xs font-medium text-purple-400 mb-1">Jarak Baris (m)</label>
                   <input id="rowSpacing" type="number" name="rowSpacing" min="0" step="0.05" value={settings.rowSpacing} onChange={handleChange} placeholder={((settings.orientation === 'Landscape' ? Number(settings.depth) : Number(settings.width)) + Number(settings.gap)).toFixed(2)} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
+                  {renderLambdaHelper('rowSpacing', settings.rowSpacing, 'text-purple-300/60')}
                 </div>
                 <div className="flex flex-col">
                   <label htmlFor="gap" className="text-xs font-medium text-purple-400 mb-1">Sub Gap (m)</label>
                   <input id="gap" type="number" name="gap" min="0" step="0.05" value={settings.gap} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
+                  {renderLambdaHelper('gap', settings.gap, 'text-purple-300/60')}
                 </div>
                 <div className="flex flex-col">
                   <label htmlFor="centralGap" className="text-xs font-medium text-purple-400 mb-1">Central Gap m</label>
                   <input id="centralGap" type="number" name="centralGap" min="0" step="0.05" value={settings.centralGap} onChange={handleChange} disabled={Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')} className={`bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm ${(Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')) ? 'opacity-50 cursor-not-allowed' : ''}`} />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="arrayFacing" className="text-xs font-medium text-purple-400 mb-1">Arah Array (Visual)</label>
-                  <select id="arrayFacing" name="arrayFacing" value={settings.arrayFacing} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300">
-                    <option value="Down">Menghadap Bawah</option>
-                    <option value="Up">Menghadap Atas</option>
-                  </select>
+                  {renderLambdaHelper('centralGap', settings.centralGap, 'text-purple-300/60')}
                 </div>
               </div>
               
@@ -345,6 +402,7 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
                       <div className="flex flex-col">
                         <label htmlFor="cardioidDelay" className="text-[10px] font-medium text-yellow-300 mb-1">Rear Additional Delay (ms)</label>
                         <input id="cardioidDelay" type="number" name="cardioidDelay" min="0" step="0.1" value={settings.cardioidDelay} onChange={handleChange} className="bg-white/5 border border-fuchsia-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-fuchsia-500/50 transition-colors text-sm w-full font-bold" />
+                        {renderLambdaHelper('cardioidDelay', settings.cardioidDelay, 'text-fuchsia-300/60', true)}
                       </div>
                       <label className="flex items-center space-x-2 cursor-pointer bg-fuchsia-900/40 px-2 py-2 rounded border border-fuchsia-500/30">
                         <input type="checkbox" checked={settings.invertRearPolarity} onChange={(e) => onChange({ ...settings, invertRearPolarity: e.target.checked })} className="w-3 h-3 text-fuchsia-500 bg-black/20 border-fuchsia-500/50 rounded focus:ring-fuchsia-400" />
@@ -364,10 +422,6 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
              <h3 className="text-sm font-bold text-rose-400 flex-1 cursor-pointer" onClick={() => togglePanel(5)}>
                5. Analisis Heatmap & Udara {openPanels[5] ? "▲" : "▼"}
              </h3>
-             <label className="flex items-center space-x-2 cursor-pointer bg-yellow-900/40 px-2 py-1 rounded border border-rose-500/30">
-                <span className="text-[10px] font-bold text-rose-400">Show Heatmap</span>
-                <input type="checkbox" name="showHeatmap" checked={settings.showHeatmap} onChange={handleChange} className="w-3 h-3 text-rose-500 bg-black/20 border-rose-500/50 rounded focus:ring-rose-400" />
-             </label>
           </div>
           {openPanels[5] && (
             <div className="space-y-4 pt-2">

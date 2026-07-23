@@ -2,16 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import type { SubwooferSettings, BoxGroup, VenueArea } from '../types';
 import { calculate2DSpatialHeatmap, splToColor } from '../utils';
 
-interface VisualizerProps {
+export interface VisualizerProps {
   settings: SubwooferSettings;
   groups: BoxGroup[];
   areas?: VenueArea[];
   activeAreaId?: string | null;
   onSelectArea?: (id: string | null) => void;
   onUpdateArea?: (id: string, updates: Partial<VenueArea>) => void;
+  onChangeSettings?: (newSettings: SubwooferSettings) => void;
 }
 
-export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea, onUpdateArea }: VisualizerProps) {
+export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea, onUpdateArea, onChangeSettings }: VisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -142,12 +143,18 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
         ctx.save();
         // If there are areas, clip the heatmap to only show inside them
         if (areas && areas.length > 0) {
+          const originX = cx + offset.x;
+          const originY = cy + offset.y;
+          const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+          
+          ctx.save();
+          ctx.translate(originX, originY);
+          ctx.rotate(angleRad);
           ctx.beginPath();
+          
           areas.forEach(area => {
-            const originX = cx + offset.x;
-            const originY = cy + offset.y;
-            const ax = originX + area.x * scale;
-            const ay = originY + -area.y * scale; // Note: Y axis is inverted logically in our coordinate system!
+            const ax = area.x * scale;
+            const ay = -area.y * scale; 
             
             ctx.save();
             ctx.translate(ax, ay);
@@ -181,25 +188,30 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
             ctx.restore();
           });
           ctx.clip();
+          ctx.restore(); // Restore the rotate translation for clip path
         }
         
         ctx.drawImage(heatmapCanvasRef.current, 0, 0, logicalWidth, logicalHeight);
-        ctx.restore();
+        ctx.restore(); // Restore the save() from line 142
       }
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.lineWidth = 1;
-      const gridSize = 1 * scale; 
+      // Dynamic Grid Sizing
+      let gridIntervalMeters = 1;
+      if (scale < 5) gridIntervalMeters = 10;
+      else if (scale < 15) gridIntervalMeters = 5;
+      else if (scale < 40) gridIntervalMeters = 2;
+      
+      const gridSize = gridIntervalMeters * scale; 
       
       const startX = (cx + offset.x) % gridSize;
       const startY = (cy + offset.y) % gridSize;
 
       ctx.beginPath();
-      for (let x = startX; x < logicalWidth; x += gridSize) {
+      for (let x = startX - gridSize; x <= logicalWidth + gridSize; x += gridSize) {
         ctx.moveTo(x, 0);
         ctx.lineTo(x, logicalHeight);
       }
-      for (let y = startY; y < logicalHeight; y += gridSize) {
+      for (let y = startY - gridSize; y <= logicalHeight + gridSize; y += gridSize) {
         ctx.moveTo(0, y);
         ctx.lineTo(logicalWidth, y);
       }
@@ -223,7 +235,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       
-      for (let x = originX % gridSize; x < logicalWidth; x += gridSize) {
+      for (let x = startX - gridSize; x <= logicalWidth + gridSize; x += gridSize) {
          if (Math.abs(x - originX) < 1) continue; 
          const meterX = (x - originX) / scale;
          ctx.fillText(`${meterX.toFixed(0)}m`, x, originY + 5);
@@ -236,7 +248,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
       
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      for (let y = originY % gridSize; y < logicalHeight; y += gridSize) {
+      for (let y = startY - gridSize; y <= logicalHeight + gridSize; y += gridSize) {
          if (Math.abs(y - originY) < 1) continue; 
          const meterY = (y - originY) / scale;
          ctx.fillText(`${meterY.toFixed(0)}m`, originX - 5, y);
@@ -250,10 +262,13 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
 
+      const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+
       // Draw Venue Areas
       if (areas && areas.length > 0) {
         ctx.save();
         ctx.translate(originX, originY);
+        ctx.rotate(angleRad);
         
         areas.forEach(area => {
            ctx.save();
@@ -308,6 +323,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
 
       ctx.save();
       ctx.translate(originX, originY);
+      ctx.rotate(angleRad);
       
       const rectW = physicalDimensionX * scale;
       const rectH = physicalDimensionY * scale;
@@ -383,9 +399,14 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
     e.preventDefault();
     const zoomSensitivity = 0.001;
     let newScale = zoomScale - e.deltaY * zoomSensitivity;
-    if (newScale < 0.2) newScale = 0.2;
+    if (newScale < 0.05) newScale = 0.05;
     if (newScale > 10) newScale = 10;
     setZoomScale(newScale);
+  };
+
+  const handleResetZoom = () => {
+    setZoomScale(1);
+    setOffset({ x: 0, y: 0 });
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -396,22 +417,29 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const originX = cx + offset.x;
+    const originY = cy + offset.y;
+    const scale = scaleRef.current;
+    
+    const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+    const invAngle = -angleRad;
+    const screenX = mouseX - originX;
+    const screenY = mouseY - originY;
+    const mx = screenX * Math.cos(invAngle) - screenY * Math.sin(invAngle);
+    const my = screenX * Math.sin(invAngle) + screenY * Math.cos(invAngle);
+    
     if (areas && areas.length > 0 && onSelectArea) {
-       const cx = rect.width / 2;
-       const cy = rect.height / 2;
-       const originX = cx + offset.x;
-       const originY = cy + offset.y;
-       const scale = scaleRef.current;
-       
        let hitId: string | null = null;
        for (let i = areas.length - 1; i >= 0; i--) {
           const area = areas[i];
-          const ax = originX + area.x * scale;
-          const ay = originY - area.y * scale;
+          const ax = area.x * scale;
+          const ay = -area.y * scale;
           const width = (area.shape === 'Circle' ? area.radius * 2 : Math.max(area.width || 0, area.topWidth || 0, area.bottomWidth || 0)) * scale;
           const height = (area.shape === 'Circle' ? area.radius * 2 : area.height || 0) * scale;
           
-          if (mouseX >= ax - width/2 && mouseX <= ax + width/2 && mouseY >= ay - height/2 && mouseY <= ay + height/2) {
+          if (mx >= ax - width/2 && mx <= ax + width/2 && my >= ay - height/2 && my <= ay + height/2) {
              hitId = area.id;
              break;
           }
@@ -446,11 +474,16 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
        const dy = e.clientY - lastMousePos.y;
        const scale = scaleRef.current;
        
+       const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+       const invAngle = -angleRad;
+       const dmx = dx * Math.cos(invAngle) - dy * Math.sin(invAngle);
+       const dmy = dx * Math.sin(invAngle) + dy * Math.cos(invAngle);
+       
        const area = areas?.find(a => a.id === draggingAreaId);
        if (area) {
          onUpdateArea(area.id, {
-           x: area.x + dx / scale,
-           y: area.y - dy / scale
+           x: area.x + dmx / scale,
+           y: area.y - dmy / scale
          });
        }
        setLastMousePos({ x: e.clientX, y: e.clientY });
@@ -475,31 +508,39 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
     const { width: logicalWidth, height: logicalHeight } = rect;
     const cx = logicalWidth / 2;
     const cy = logicalHeight / 2;
+    const originX = cx + offset.x;
+    const originY = cy + offset.y;
+    const scale = scaleRef.current;
     
     const physicalDimensionX = settings.orientation === 'Landscape' ? Number(settings.width) : Number(settings.depth);
     const physicalDimensionY = settings.orientation === 'Landscape' ? Number(settings.depth) : Number(settings.width);
-    const arrayLength = (Number(settings.count) - 1) * (physicalDimensionX + Number(settings.gap)) + physicalDimensionX + (Number(settings.count) % 2 === 0 ? Number(settings.centralGap) - Number(settings.gap) : 0);
-    const maxPlotRadius = Math.max(arrayLength * 1.2, 10);
-    const baseScale = Math.min((logicalWidth - 40) / Math.max(arrayLength, 1), (logicalHeight - 40) / maxPlotRadius, 150);
-    const scale = baseScale * zoomScale;
+    const rectW = physicalDimensionX * scale;
+    const rectH = physicalDimensionY * scale;
     
-    const boxW = physicalDimensionX * scale;
-    const boxH = physicalDimensionY * scale;
+    const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+    const invAngle = -angleRad;
+    const screenX = (e.clientX - rect.left) - originX;
+    const screenY = (e.clientY - rect.top) - originY;
+    const mx = screenX * Math.cos(invAngle) - screenY * Math.sin(invAngle);
+    const my = screenX * Math.sin(invAngle) + screenY * Math.cos(invAngle);
     
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    const hovered = groups.find(group => {
-       const px = cx + offset.x + group.x * scale;
-       const py = cy + offset.y + group.y * scale;
-       
-       const left = px - boxW / 2;
-       const right = px + boxW / 2;
-       const top = py - boxH / 2;
-       const bottom = py + boxH / 2;
-       
-       return mouseX >= left && mouseX <= right && mouseY >= top && mouseY <= bottom;
-    });
+    let hovered: any = null;
+    for (let i = groups.length - 1; i >= 0; i--) {
+       const group = groups[i];
+       const isRowBased = Number(settings.rows) > 1;
+       for (const box of group.boxes) {
+          const physicalY = box.y - (!isRowBased && box.isRear ? physicalDimensionY : 0);
+          const px = box.x * scale;
+          const py = physicalY * scale;
+          const renderX = px - rectW / 2;
+          const renderY = py - rectH / 2;
+          if (mx >= renderX && mx <= renderX + rectW && my >= renderY && my <= renderY + rectH) {
+             hovered = group;
+             break;
+          }
+       }
+       if (hovered) break;
+    }
     
     setHoveredGroup(hovered || null);
   };
@@ -512,22 +553,29 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
         const touchX = e.touches[0].clientX - rect.left;
         const touchY = e.touches[0].clientY - rect.top;
         
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+        const originX = cx + offset.x;
+        const originY = cy + offset.y;
+        const scale = scaleRef.current;
+        
+        const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+        const invAngle = -angleRad;
+        const screenX = touchX - originX;
+        const screenY = touchY - originY;
+        const mx = screenX * Math.cos(invAngle) - screenY * Math.sin(invAngle);
+        const my = screenX * Math.sin(invAngle) + screenY * Math.cos(invAngle);
+        
         if (areas && areas.length > 0 && onSelectArea) {
-           const cx = rect.width / 2;
-           const cy = rect.height / 2;
-           const originX = cx + offset.x;
-           const originY = cy + offset.y;
-           const scale = scaleRef.current;
-           
            let hitId: string | null = null;
            for (let i = areas.length - 1; i >= 0; i--) {
               const area = areas[i];
-              const ax = originX + area.x * scale;
-              const ay = originY - area.y * scale;
+              const ax = area.x * scale;
+              const ay = -area.y * scale;
               const width = (area.shape === 'Circle' ? area.radius * 2 : Math.max(area.width || 0, area.topWidth || 0, area.bottomWidth || 0)) * scale;
               const height = (area.shape === 'Circle' ? area.radius * 2 : area.height || 0) * scale;
               
-              if (touchX >= ax - width/2 && touchX <= ax + width/2 && touchY >= ay - height/2 && touchY <= ay + height/2) {
+              if (mx >= ax - width/2 && mx <= ax + width/2 && my >= ay - height/2 && my <= ay + height/2) {
                  hitId = area.id;
                  break;
               }
@@ -559,11 +607,16 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
        const dy = e.touches[0].clientY - lastMousePos.y;
        const scale = scaleRef.current;
        
+       const angleRad = settings.arrayFacing === 'Up' ? Math.PI : settings.arrayFacing === 'Left' ? -Math.PI/2 : settings.arrayFacing === 'Right' ? Math.PI/2 : 0;
+       const invAngle = -angleRad;
+       const dmx = dx * Math.cos(invAngle) - dy * Math.sin(invAngle);
+       const dmy = dx * Math.sin(invAngle) + dy * Math.cos(invAngle);
+       
        const area = areas?.find(a => a.id === draggingAreaId);
        if (area) {
          onUpdateArea(area.id, {
-           x: area.x + dx / scale,
-           y: area.y - dy / scale
+           x: area.x + dmx / scale,
+           y: area.y - dmy / scale
          });
        }
        setLastMousePos({ x: e.touches[0].clientX, y: e.touches[0].clientY });
@@ -581,7 +634,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
       setLastTouchDistance(dist);
       
       let newScale = zoomScale + delta * 0.01;
-      if (newScale < 0.2) newScale = 0.2;
+      if (newScale < 0.05) newScale = 0.05;
       if (newScale > 10) newScale = 10;
       setZoomScale(newScale);
     }
@@ -634,6 +687,45 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
           </>
         )}
       </div>
+
+      {/* Map Controls Overlay */}
+      {onChangeSettings && (
+        <div className="absolute bottom-4 left-4 flex flex-col space-y-2 z-20 print:hidden items-start">
+           <label className="flex items-center space-x-2 cursor-pointer bg-zinc-900/80 hover:bg-zinc-800 px-3 py-2 rounded-lg border border-gray-700 shadow-lg backdrop-blur-md transition-colors">
+              <input 
+                type="checkbox" 
+                checked={settings.showHeatmap} 
+                onChange={(e) => onChangeSettings({ ...settings, showHeatmap: e.target.checked })}
+                className="w-4 h-4 text-rose-500 bg-black/50 border-gray-500 rounded focus:ring-rose-400"
+              />
+              <span className="text-xs font-bold text-gray-200">Show Heatmap</span>
+           </label>
+           
+           <div className="flex flex-col bg-zinc-900/80 px-3 py-2 rounded-lg border border-gray-700 shadow-lg backdrop-blur-md w-full">
+              <label htmlFor="visFacing" className="text-[10px] font-bold text-gray-400 mb-1 text-left">Arah Panggung (Visual)</label>
+              <select 
+                id="visFacing"
+                value={settings.arrayFacing}
+                onChange={(e) => onChangeSettings({ ...settings, arrayFacing: e.target.value as any })}
+                className="bg-black/50 border border-gray-600 rounded px-2 py-1 text-white focus:outline-none focus:border-gray-400 transition-colors text-xs font-bold text-left"
+              >
+                <option value="Down">⬇️ Menghadap Bawah</option>
+                <option value="Up">⬆️ Menghadap Atas</option>
+                <option value="Left">⬅️ Menghadap Kiri</option>
+                <option value="Right">➡️ Menghadap Kanan</option>
+              </select>
+           </div>
+        </div>
+      )}
+
+      {/* Reset Zoom Button */}
+      <button 
+        onClick={handleResetZoom}
+        className="absolute bottom-4 right-4 bg-zinc-800/80 hover:bg-zinc-700 text-white px-3 py-1.5 rounded-lg border border-gray-600 shadow-lg text-xs font-bold transition-colors backdrop-blur-md print:hidden flex items-center space-x-2"
+        title="Reset Zoom dan Posisi"
+      >
+        <span>Reset View</span>
+      </button>
     </div>
   );
 }

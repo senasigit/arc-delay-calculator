@@ -22,7 +22,7 @@ export interface SubwooferSettings {
   count: number | '';
   preset: string; 
   orientation: 'Landscape' | 'Portrait';
-  arrayFacing: 'Up' | 'Down';
+  arrayFacing: 'Up' | 'Down' | 'Left' | 'Right';
   width: number | '';
   height: number | '';
   depth: number | '';

@@ -124,18 +124,16 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
       }
     }
 
-    const facingMultiplier = settings.arrayFacing === 'Up' ? -1 : 1;
-
     groups.push({
       positionId: id,
       label,
       x,
-      y: y * facingMultiplier,
-      virtualY: virtualY * facingMultiplier,
+      y,
+      virtualY,
       baseDelayMs: baseGroupDelayMs,
       muted: isMuted,
       cardioidDisabled,
-      boxes: physicalBoxes.map(b => ({ ...b, y: b.y * facingMultiplier }))
+      boxes: physicalBoxes
     });
   };
 
@@ -242,11 +240,25 @@ export function calculate2DSpatialHeatmap(
   
   for (let r = 0; r < rows; r++) {
     const py = r * blockSize; 
-    const yMeters = -(py - cy - offsetY) / scale; 
+    const visualY = (py - cy - offsetY) / scale; 
     
     for (let c = 0; c < cols; c++) {
       const px = c * blockSize;
-      const xMeters = (px - cx - offsetX) / scale;
+      const visualX = (px - cx - offsetX) / scale;
+      
+      let xMeters = visualX;
+      let yMeters = visualY;
+      
+      if (settings.arrayFacing === 'Up') {
+         xMeters = -visualX;
+         yMeters = -visualY;
+      } else if (settings.arrayFacing === 'Left') {
+         xMeters = -visualY;
+         yMeters = visualX;
+      } else if (settings.arrayFacing === 'Right') {
+         xMeters = visualY;
+         yMeters = -visualX;
+      }
       
       let totalSquarePressure = 0;
 
