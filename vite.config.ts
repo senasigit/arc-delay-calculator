@@ -11,8 +11,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
-        name: 'Arc Delay Calculator',
-        short_name: 'Arc Delay',
+        name: 'Sub Forge',
+        short_name: 'Sub Forge',
         description: 'Professional Subwoofer Array & Arc Delay Calculator',
         theme_color: '#0a0c10',
         background_color: '#0a0c10',

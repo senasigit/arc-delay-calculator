@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "arc-delay-sena"
-  }
+  },
+  "targets": {
+    "arc-delay-sena": {
+      "hosting": {
+        "sub-forge": [
+          "sub-forge"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

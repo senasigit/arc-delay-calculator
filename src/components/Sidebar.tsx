@@ -127,7 +127,10 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
     <div className="w-full md:w-80 h-full bg-slate-900/40 backdrop-blur-md md:border-r border-white/10 flex flex-col overflow-y-auto">
       <div className="p-6 pb-2">
         <div className="flex justify-between items-start mb-2">
-           <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 leading-tight drop-shadow-lg tracking-tight">Sub Forge</h1>
+           <div className="flex items-center cursor-pointer group" onClick={() => alert("Sub Forge\nCreated by Sena Sigit\nInstagram: @senatarium\nCopyright 2026")}>
+             <img src="/logo.png" alt="Sub Forge Logo" className="w-8 h-8 mr-2 group-hover:scale-110 transition-transform object-contain" />
+             <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 leading-tight drop-shadow-lg tracking-tight">Sub Forge</h1>
+           </div>
            <div className="flex flex-col space-y-2">
              {onCloseProject && (
                <button onClick={onCloseProject} className="bg-yellow-600 hover:bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold text-white transition-colors border border-yellow-500 shadow">

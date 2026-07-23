@@ -84,7 +84,10 @@ export function ProjectModal({ onSelectProject, defaultSettings, defaultReportIn
   return (
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
       <div className="bg-[#0a0c10] border border-dark-border rounded-lg shadow-2xl w-full max-w-md p-6">
-        <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-amber-500 mb-2">Sub Forge</h2>
+        <div className="flex items-center mb-2 justify-center">
+          <img src="/logo.png" alt="Sub Forge Logo" className="w-10 h-10 mr-3 object-contain" />
+          <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-amber-500">Sub Forge</h2>
+        </div>
         <p className="text-sm text-yellow-400 mb-6">Pilih project yang sudah ada atau buat baru.</p>
         
         <div className="mb-6">
