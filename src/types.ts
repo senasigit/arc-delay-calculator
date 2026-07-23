@@ -1,26 +1,50 @@
 export type SetupType = 'Arc Array' | 'L/R' | 'End-Fire' | 'Cardioid L/R' | 'End-Fire L/R' | 'Gradient Array';
+export type ShapeType = 'Rectangle' | 'Circle' | 'Triangle' | 'Trapezoid';
+
+export interface VenueArea {
+  id: string;
+  name: string;
+  shape: ShapeType;
+  x: number; 
+  y: number; 
+  width: number; 
+  height: number; 
+  radius: number; 
+  topWidth?: number; 
+  bottomWidth?: number; 
+  rotation: number; 
+  color: string; 
+}
 
 export interface SubwooferSettings {
   setupType: SetupType;
-  stageWidth: number;
-  count: number;
+  stageWidth: number | '';
+  count: number | '';
   preset: string; 
   orientation: 'Landscape' | 'Portrait';
-  width: number;
-  height: number;
-  depth: number;
-  stack: number; 
-  gap: number;
-  centralGap: number;
-  theta: number; 
-  speedOfSound: number;
-  frequency: number; 
+  width: number | '';
+  height: number | '';
+  depth: number | '';
+  stack: number | ''; 
+  gap: number | '';
+  rowSpacing: number | ''; // Jarak Muka ke Muka (Front-to-Front)
+  rowGap: number | ''; // Jarak fisik antar baris (depan-belakang)
+  centralGap: number | '';
+  theta: number | ''; // Spread angle for Arc Array
+  speedOfSound: number | '';
+  temperature: number | ''; // in Celsius
+  humidity: number | ''; // in %
+  frequency: number | ''; // Frequency for Heatmap
+  targetFrequency: number | ''; // Target Frequency for 1/4 Lambda calculations
   bandwidth: 'Single' | '1/3 Octave' | '1 Octave' | 'Broadband';
   resolution: 'Low' | 'Medium' | 'High';
   showHeatmap: boolean;
   cardioid: boolean;
-  cardioidDelay: number;
+  cardioidDelay: number | '';
+  invertRearPolarity: boolean; // Option to invert rear box polarity
+  endFireDelayStep: number | ''; // Manual override for End-Fire delay step
   cardioidReversedBoxes: boolean[]; 
+  rows: number | ''; // For Array Depth
 }
 
 export interface PhysicalBox {
@@ -31,6 +55,7 @@ export interface PhysicalBox {
   delayMs: number; 
   polarity: 1 | -1; 
   isRear: boolean;
+  positionLabel: string;
 }
 
 export interface BoxGroup {
@@ -64,4 +89,13 @@ export interface ReportInfo {
   venue: string;
   engineer: string;
   date: string;
+}
+
+export interface ProjectData {
+  id: string;
+  name: string;
+  settings: SubwooferSettings;
+  areas?: VenueArea[];
+  reportInfo: ReportInfo;
+  updatedAt: number;
 }

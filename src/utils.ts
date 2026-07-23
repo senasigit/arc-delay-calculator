@@ -1,8 +1,21 @@
 import type { SubwooferSettings, BoxGroup, PhysicalBox, ArrayStats } from './types';
 
 export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set(), disabledCardioidPositions: Set<number> = new Set()): { groups: BoxGroup[], stats: ArrayStats } {
-  const { setupType, stageWidth, count, orientation, width, depth, gap, centralGap, theta, speedOfSound, cardioid, cardioidDelay, stack, cardioidReversedBoxes } = settings;
-  const n = count;
+  const { setupType, cardioid, cardioidReversedBoxes } = settings;
+  const count = Number(settings.count) || 0;
+  const stageWidth = Number(settings.stageWidth) || 0;
+  const orientation = settings.orientation;
+  const width = Number(settings.width) || 0;
+  const depth = Number(settings.depth) || 0;
+  const gap = Number(settings.gap) || 0;
+  const centralGap = Number(settings.centralGap) || 0;
+  const theta = Number(settings.theta) || 0;
+  const speedOfSound = Number(settings.speedOfSound) || 343;
+  const cardioidDelay = Number(settings.cardioidDelay) || 0;
+  const stackCount = Number(settings.stack) || 1;
+  const rowsCount = Number(settings.rows) || 1;
+  
+  const n = setupType.includes('L/R') ? Math.floor(count / 2) * 2 : count;
   
   if (n < 1) return { groups: [], stats: { acousticCenterSpacing: 0, totalArrayLength: 0, upperFreqLimit: 0 } };
 
@@ -36,26 +49,77 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
   const isEven = n % 2 === 0;
 
   // Helpers
-  const createGroup = (id: number, label: string, x: number, y: number, virtualY: number, delayMs: number) => {
+  const createGroup = (id: number, label: string, x: number, y: number, virtualY: number, baseGroupDelayMs: number) => {
     const isMuted = mutedPositions.has(id);
     const cardioidDisabled = disabledCardioidPositions.has(id);
     const physicalBoxes: PhysicalBox[] = [];
     const rearPhysicalY = dimensionY;
+    const isRowBased = rowsCount > 1;
+    const isEndFire = setupType.includes('End-Fire');
+    const rowSpacing = Number(settings.rowSpacing) || (dimensionY + gap);
+    const spacingY = rowSpacing;
     
-    for (let s = 0; s < stack; s++) {
-      const isRear = cardioid && !cardioidDisabled && cardioidReversedBoxes[s] === true;
-      const boxZ = (s * settings.height) + (settings.height / 2);
-      const boxY = y + (isRear ? rearPhysicalY : 0); 
+    for (let r = 0; r < rowsCount; r++) {
+      let rowDelayMs = baseGroupDelayMs;
       
-      physicalBoxes.push({
-        stackIndex: s,
-        x,
-        y: boxY,
-        z: boxZ,
-        delayMs: delayMs + (isRear ? cardioidDelay : 0),
-        polarity: isRear ? -1 : 1,
-        isRear
-      });
+      // End Fire applies specific delay per row (front is max delay, rear is 0 delay)
+      // Row 0 is the REAR box (0m), Row 1 is in front of it (-spacingY), etc.
+      if (isEndFire && isRowBased) {
+          const delayStep = typeof settings.endFireDelayStep === 'number' 
+             ? settings.endFireDelayStep 
+             : ((spacingY / speedOfSound) * 1000);
+          rowDelayMs += r * delayStep;
+      }
+
+      for (let s = 0; s < stackCount; s++) {
+        const revIndex = isRowBased ? r : s;
+        const isCardioidSetup = cardioid || setupType === 'Cardioid L/R';
+        const isRear = !isEndFire && isCardioidSetup && !cardioidDisabled && cardioidReversedBoxes[revIndex] === true;
+        const boxZ = (s * Number(settings.height)) + (Number(settings.height) / 2);
+        
+        const rowPhysicalY = (isEndFire ? -r : r) * spacingY;
+        const boxY = y + rowPhysicalY + (!isRowBased && isRear ? rearPhysicalY : 0); 
+        
+        let polarity = 1;
+        const isGradientBehavior = setupType === 'Gradient Array' || setupType === 'Cardioid L/R';
+        if (isRear || (isGradientBehavior && isRowBased && r > 0)) {
+           polarity = settings.invertRearPolarity ? -1 : 1;
+        }
+
+        let boxDelayMs = rowDelayMs;
+        
+        let positionLabel = '';
+        if (isRowBased) {
+            if (isEndFire) {
+                positionLabel = r === 0 ? 'REAR' : (r === rowsCount - 1 ? 'FRONT' : `ROW ${r+1}`);
+            } else {
+                positionLabel = r === 0 ? 'FRONT' : (r === rowsCount - 1 ? 'REAR' : `ROW ${r+1}`);
+            }
+        } else {
+            positionLabel = isRear ? 'REAR' : 'FRONT';
+        }
+        
+        if (isGradientBehavior) {
+           if (isRowBased && r > 0) {
+              boxDelayMs += cardioidDelay;
+           }
+        } else {
+           if (isRear) {
+              boxDelayMs += cardioidDelay;
+           }
+        }
+        
+        physicalBoxes.push({
+          stackIndex: isRowBased ? (r * stackCount + s) : s,
+          x,
+          y: boxY,
+          z: boxZ,
+          delayMs: boxDelayMs,
+          polarity: polarity as 1 | -1,
+          isRear: isGradientBehavior ? false : isRear,
+          positionLabel
+        });
+      }
     }
 
     groups.push({
@@ -64,14 +128,15 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
       x,
       y,
       virtualY,
-      baseDelayMs: delayMs,
+      baseDelayMs: baseGroupDelayMs,
       muted: isMuted,
       cardioidDisabled,
       boxes: physicalBoxes
     });
   };
 
-  if (setupType === 'Arc Array' || setupType === 'Gradient Array') {
+  if (setupType === 'Arc Array' || setupType === 'Gradient Array' || setupType === 'End-Fire') {
+      // End-Fire Array also uses this distribution (X axis along stage)
       for (let i = 0; i < n; i++) {
         let x = 0;
         let label = '';
@@ -107,66 +172,22 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
         createGroup(i, label, x, 0, virtualY, delayMs);
       }
   } 
-  else if (setupType === 'L/R' || setupType === 'Cardioid L/R') {
-      const leftCount = Math.floor(n / 2);
-      const rightCount = Math.floor(n / 2);
-      const hasCenter = n % 2 !== 0;
+  else if (setupType === 'L/R' || setupType === 'Cardioid L/R' || setupType === 'End-Fire L/R') {
+      const leftCount = n / 2;
+      const rightCount = n / 2;
 
       // Draw left cluster
       const leftStartX = -(stageWidth / 2) - ((leftCount - 1) * acousticCenterSpacing) / 2;
       for (let i = 0; i < leftCount; i++) {
          const x = leftStartX + (i * acousticCenterSpacing);
-         createGroup(i, `L/R Left ${i + 1}`, x, 0, 0, 0);
+         createGroup(i, `${setupType} Left ${i + 1}`, x, 0, 0, 0);
       }
 
       // Draw right cluster
       const rightStartX = (stageWidth / 2) - ((rightCount - 1) * acousticCenterSpacing) / 2;
       for (let i = 0; i < rightCount; i++) {
          const x = rightStartX + (i * acousticCenterSpacing);
-         createGroup(leftCount + i, `L/R Right ${i + 1}`, x, 0, 0, 0);
-      }
-
-      // Center if odd
-      if (hasCenter) {
-         createGroup(n - 1, `L/R Center`, 0, 0, 0, 0);
-      }
-  }
-  else if (setupType === 'End-Fire') {
-      // y increases backwards. Front box is y=0.
-      // delay = (distance to front / c) * 1000
-      const spacingY = dimensionY + gap;
-      for (let i = 0; i < n; i++) {
-          const y = i * spacingY;
-          // front box (i=0) has max delay. rear box (i=n-1) has 0 delay.
-          // wait, to align at the front, sound from rear (i=n-1) takes time to reach front.
-          // so rear fires FIRST (delay=0). Front fires LAST (delay=max).
-          const distanceToRear = ((n - 1) - i) * spacingY;
-          const delayMs = (distanceToRear / speedOfSound) * 1000;
-          createGroup(i, `End-Fire ${i + 1}`, 0, y, 0, delayMs);
-      }
-  }
-  else if (setupType === 'End-Fire L/R') {
-      const leftCount = Math.floor(n / 2);
-      const rightCount = Math.floor(n / 2);
-      const hasCenter = n % 2 !== 0;
-      const spacingY = dimensionY + gap;
-
-      for (let i = 0; i < leftCount; i++) {
-          const y = i * spacingY;
-          const distanceToRear = ((leftCount - 1) - i) * spacingY;
-          const delayMs = (distanceToRear / speedOfSound) * 1000;
-          createGroup(i, `EF Left ${i + 1}`, -stageWidth / 2, y, 0, delayMs);
-      }
-
-      for (let i = 0; i < rightCount; i++) {
-          const y = i * spacingY;
-          const distanceToRear = ((rightCount - 1) - i) * spacingY;
-          const delayMs = (distanceToRear / speedOfSound) * 1000;
-          createGroup(leftCount + i, `EF Right ${i + 1}`, stageWidth / 2, y, 0, delayMs);
-      }
-
-      if (hasCenter) {
-         createGroup(n - 1, `EF Center`, 0, 0, 0, 0); // single box, no endfire delay
+         createGroup(leftCount + i, `${setupType} Right ${i + 1}`, x, 0, 0, 0);
       }
   }
 
@@ -212,12 +233,12 @@ export function calculate2DSpatialHeatmap(
       return { heatmap, cols, rows, maxSpl: 0, minSpl: 0, blockSize };
   }
 
-  const frequencies = getFrequenciesForBandwidth(frequency, bandwidth);
+  const frequencies = getFrequenciesForBandwidth(Number(frequency) || 63, bandwidth);
   const EAR_HEIGHT = 1.6; 
   
   for (let r = 0; r < rows; r++) {
     const py = r * blockSize; 
-    const yMeters = (py - cy - offsetY) / scale; 
+    const yMeters = -(py - cy - offsetY) / scale; 
     
     for (let c = 0; c < cols; c++) {
       const px = c * blockSize;
@@ -226,7 +247,7 @@ export function calculate2DSpatialHeatmap(
       let totalSquarePressure = 0;
 
       for (const freq of frequencies) {
-        const k = (2 * Math.PI * freq) / speedOfSound;
+        const k = (2 * Math.PI * freq) / (Number(speedOfSound) || 343);
         let realSum = 0;
         let imagSum = 0;
         
@@ -245,7 +266,7 @@ export function calculate2DSpatialHeatmap(
             const attenuation = 1 / distance;
             const delaySec = box.delayMs / 1000;
             
-            const effectiveDistance = distance + (delaySec * speedOfSound);
+            const effectiveDistance = distance + (delaySec * (Number(speedOfSound) || 343));
             const phase = k * effectiveDistance;
             
             const pressure = attenuation * box.polarity; 
