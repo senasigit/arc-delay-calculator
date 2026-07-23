@@ -136,7 +136,7 @@ function App() {
       </div>
 
       {/* Sidebar Kiri */}
-      <div className={`${activeTab === 'setup' ? 'block' : 'hidden print:block'} md:block ${isLeftSidebarOpen ? 'w-full md:w-80' : 'w-0 overflow-hidden'} flex-shrink-0 transition-all duration-300 print:hidden relative`}>
+      <div className={`${activeTab === 'setup' ? 'flex-1 min-h-0' : 'hidden print:block'} md:flex-none md:block ${isLeftSidebarOpen ? 'w-full md:w-80 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 transition-all duration-300 print:hidden relative`}>
         <div className="w-full md:w-80 h-full">
           <Sidebar 
             settings={settings} 
@@ -188,7 +188,7 @@ function App() {
         {/* Area Map & Tabel */}
         <div className="flex-1 flex flex-col md:flex-row print:block print:w-full h-full overflow-hidden">
           {/* Tengah: Visualizer Dinamis */}
-          <div className={`${activeTab === 'map' ? 'flex' : 'hidden print:flex'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300 rounded-lg m-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-white/10`}>
+          <div className={`${activeTab === 'map' ? 'flex-1 min-h-0' : 'hidden print:flex'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300 rounded-lg m-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-white/10`}>
             
             {/* Toggle Left Sidebar Button */}
             <button 
@@ -240,7 +240,7 @@ function App() {
           </div>
 
           {/* Kanan: Tabel Data */}
-          <div className={`${activeTab === 'dsp' ? 'block' : 'hidden print:block'} md:block ${isRightSidebarOpen ? 'w-full md:w-96' : 'w-0 overflow-hidden'} flex-shrink-0 border-l border-white/10 bg-slate-900/40 backdrop-blur-md print:w-full print:border-none transition-all duration-300 relative`}>
+          <div className={`${activeTab === 'dsp' ? 'flex-1 min-h-0' : 'hidden print:block'} md:block ${isRightSidebarOpen ? 'w-full md:w-96 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 border-l border-white/10 bg-slate-900/40 backdrop-blur-md print:w-full print:border-none transition-all duration-300 relative`}>
             <div className="w-full md:w-96 h-full overflow-y-auto">
               <DataTable 
                 groups={groups} 
