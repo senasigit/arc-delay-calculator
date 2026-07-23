@@ -111,6 +111,8 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
         
         physicalBoxes.push({
           stackIndex: isRowBased ? (r * stackCount + s) : s,
+          rowIndex: r,
+          stackLevel: s,
           x,
           y: boxY,
           z: boxZ,
@@ -122,16 +124,18 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
       }
     }
 
+    const facingMultiplier = settings.arrayFacing === 'Up' ? -1 : 1;
+
     groups.push({
       positionId: id,
       label,
       x,
-      y,
-      virtualY,
+      y: y * facingMultiplier,
+      virtualY: virtualY * facingMultiplier,
       baseDelayMs: baseGroupDelayMs,
       muted: isMuted,
       cardioidDisabled,
-      boxes: physicalBoxes
+      boxes: physicalBoxes.map(b => ({ ...b, y: b.y * facingMultiplier }))
     });
   };
 

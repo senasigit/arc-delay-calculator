@@ -16,6 +16,7 @@ function App() {
     count: '',
     preset: 'Custom',
     orientation: 'Landscape',
+    arrayFacing: 'Down',
     width: '',
     height: '',
     depth: '',

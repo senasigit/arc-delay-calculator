@@ -274,15 +274,22 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
                 </div>
                 <div className="flex flex-col">
                   <label htmlFor="rowSpacing" className="text-xs font-medium text-purple-400 mb-1">Jarak Baris (m)</label>
-                  <input id="rowSpacing" type="number" name="rowSpacing" min="0" step="0.05" value={settings.rowSpacing} onChange={handleChange} placeholder="Auto" className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
+                  <input id="rowSpacing" type="number" name="rowSpacing" min="0" step="0.05" value={settings.rowSpacing} onChange={handleChange} placeholder={((settings.orientation === 'Landscape' ? Number(settings.depth) : Number(settings.width)) + Number(settings.gap)).toFixed(2)} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
                 </div>
                 <div className="flex flex-col">
                   <label htmlFor="gap" className="text-xs font-medium text-purple-400 mb-1">Sub Gap (m)</label>
                   <input id="gap" type="number" name="gap" min="0" step="0.05" value={settings.gap} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
                 </div>
-                <div className="flex flex-col col-span-2">
-                  <label htmlFor="centralGap" className="text-xs font-medium text-purple-400 mb-1">Central Gap m (Center-to-Center)</label>
+                <div className="flex flex-col">
+                  <label htmlFor="centralGap" className="text-xs font-medium text-purple-400 mb-1">Central Gap m</label>
                   <input id="centralGap" type="number" name="centralGap" min="0" step="0.05" value={settings.centralGap} onChange={handleChange} disabled={Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')} className={`bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm ${(Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')) ? 'opacity-50 cursor-not-allowed' : ''}`} />
+                </div>
+                <div className="flex flex-col">
+                  <label htmlFor="arrayFacing" className="text-xs font-medium text-purple-400 mb-1">Arah Array (Visual)</label>
+                  <select id="arrayFacing" name="arrayFacing" value={settings.arrayFacing} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300">
+                    <option value="Down">Menghadap Bawah</option>
+                    <option value="Up">Menghadap Atas</option>
+                  </select>
                 </div>
               </div>
               

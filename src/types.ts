@@ -22,6 +22,7 @@ export interface SubwooferSettings {
   count: number | '';
   preset: string; 
   orientation: 'Landscape' | 'Portrait';
+  arrayFacing: 'Up' | 'Down';
   width: number | '';
   height: number | '';
   depth: number | '';
@@ -49,6 +50,8 @@ export interface SubwooferSettings {
 
 export interface PhysicalBox {
   stackIndex: number; 
+  rowIndex?: number;
+  stackLevel?: number;
   x: number;
   y: number; 
   z: number; 
