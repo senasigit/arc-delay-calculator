@@ -1,5 +1,5 @@
-export type SetupType = 'Arc Array' | 'L/R' | 'End-Fire' | 'Cardioid L/R' | 'End-Fire L/R' | 'Gradient Array';
-export type ShapeType = 'Rectangle' | 'Circle' | 'Triangle' | 'Trapezoid';
+export type SetupType = 'End-Fire' | 'Gradient In-Line' | 'Gradient Inverted Stack' | 'Auto-Efficiency' | 'Pattern Implosion' | 'Curved Array' | 'Straight Delayed Array' | 'L/R' | 'End-Fire L/R' | 'Cardioid L/R';
+export type ShapeType = 'Rectangle' | 'Circle' | 'Triangle' | 'Trapezoid' | 'Semicircle';
 
 export interface VenueArea {
   id: string;
@@ -45,7 +45,11 @@ export interface SubwooferSettings {
   invertRearPolarity: boolean; // Option to invert rear box polarity
   endFireDelayStep: number | ''; // Manual override for End-Fire delay step
   cardioidReversedBoxes: boolean[]; 
+  cardioidSpacers: boolean; // Mind the Gap feature
+  cardioidSpacerSize: number | ''; // Size of the spacer in meters
   rows: number | ''; // For Array Depth
+  muteFront?: boolean;
+  muteRear?: boolean;
 }
 
 export interface PhysicalBox {
@@ -58,6 +62,7 @@ export interface PhysicalBox {
   delayMs: number; 
   polarity: 1 | -1; 
   isRear: boolean;
+  muted?: boolean;
   positionLabel: string;
 }
 
@@ -85,6 +90,7 @@ export interface SubwooferPreset {
   width: number;
   height: number;
   depth: number;
+  defaultCardioidDelay?: number;
 }
 
 export interface ReportInfo {

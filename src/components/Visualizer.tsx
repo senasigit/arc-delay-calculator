@@ -32,6 +32,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
   // Offscreen canvas for debounced heatmap
   const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [heatmapVersion, setHeatmapVersion] = useState(0);
+  const [splMode, setSplMode] = useState<'Relative' | 'Absolute'>('Relative');
 
   if (!heatmapCanvasRef.current) {
      heatmapCanvasRef.current = document.createElement('canvas');
@@ -81,7 +82,8 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
             for (let r = 0; r < data.rows; r++) {
               for (let c = 0; c < data.cols; c++) {
                 const spl = data.heatmap[r * data.cols + c];
-                const colorStr = splToColor(spl, data.maxSpl, 35);
+                const scaleTop = splMode === 'Absolute' ? 10 : data.maxSpl;
+                const colorStr = splToColor(spl, scaleTop, 35);
                 hCtx.fillStyle = colorStr;
                 hCtx.fillRect(c * data.blockSize, r * data.blockSize, data.blockSize + 0.5, data.blockSize + 0.5);
               }
@@ -92,7 +94,7 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
     }, 150);
 
     return () => clearTimeout(timeout);
-  }, [settings, groups, offset, zoomScale]);
+  }, [settings, groups, offset, zoomScale, splMode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -168,6 +170,10 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
               const r = area.radius * scale;
               ctx.moveTo(r, 0); 
               ctx.arc(0, 0, r, 0, Math.PI * 2);
+            } else if (area.shape === 'Semicircle') {
+              const r = area.radius * scale;
+              ctx.arc(0, 0, r, Math.PI, 0);
+              ctx.closePath();
             } else if (area.shape === 'Triangle') {
               const w = area.width * scale;
               const h = area.height * scale;
@@ -284,6 +290,9 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
               ctx.rect(-aw/2, -ah/2, aw, ah);
            } else if (area.shape === 'Circle') {
               ctx.arc(0, 0, (area.radius || 0) * scale, 0, 2 * Math.PI);
+           } else if (area.shape === 'Semicircle') {
+              ctx.arc(0, 0, (area.radius || 0) * scale, Math.PI, 0);
+              ctx.closePath();
            } else if (area.shape === 'Triangle') {
               const aw = (area.width || 0) * scale;
               const ah = (area.height || 0) * scale;
@@ -332,13 +341,10 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
         const isHovered = hoveredGroup?.positionId === group.positionId;
         const isMuted = group.muted;
         
-        ctx.fillStyle = isMuted ? '#1f2937' : (isHovered ? '#60a5fa' : '#374151'); 
-        ctx.strokeStyle = isMuted ? '#111827' : (isHovered ? '#ffffff' : '#111827'); 
-        ctx.lineWidth = 2;
-        
-        // Draw each physical box in the group (handles rows, stacks will draw over each other which is fine for 2D)
+        // Draw each physical box in the group
         const isRowBased = Number(settings.rows) > 1;
         group.boxes.forEach(box => {
+            const isBoxMuted = isMuted || box.muted;
             // Revert the acoustic center shift to draw the physical footprint for stacked reversed boxes
             const physicalY = box.y - (!isRowBased && box.isRear ? physicalDimensionY : 0);
             
@@ -347,10 +353,23 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
             const renderX = px - rectW / 2;
             const renderY = py - rectH / 2;
             
+            // Background fill
+            ctx.fillStyle = isBoxMuted ? '#1f2937' : (isHovered ? '#60a5fa' : '#374151'); 
             ctx.fillRect(renderX, renderY, rectW, rectH);
+            
+            // Inverted Polarity Styling (Black outline, thicker)
+            if (box.polarity === -1) {
+               ctx.strokeStyle = '#000000';
+               ctx.lineWidth = 4;
+            } else {
+               ctx.strokeStyle = isBoxMuted ? '#111827' : (isHovered ? '#ffffff' : '#111827'); 
+               ctx.lineWidth = 2;
+            }
+            
+            ctx.setLineDash([]);
             ctx.strokeRect(renderX, renderY, rectW, rectH);
             
-            if (isMuted) {
+            if (isBoxMuted) {
                ctx.strokeStyle = '#ef4444';
                ctx.lineWidth = 2;
                ctx.beginPath();
@@ -360,6 +379,20 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
                ctx.lineTo(renderX, renderY + rectH);
                ctx.stroke();
             }
+            
+            // Draw Acoustic Center (Virtual Source)
+            // Uses box.x and box.y which represent the acoustic center
+            const acX = box.x * scale;
+            const acY = box.y * scale;
+            const acRadius = Math.max(rectW, rectH) * 0.75;
+            
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]); // Dashed line
+            ctx.beginPath();
+            ctx.arc(acX, acY, acRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset line dash
         });
       });
       ctx.restore();
@@ -687,6 +720,40 @@ export function Visualizer({ settings, groups, areas, activeAreaId, onSelectArea
           </>
         )}
       </div>
+
+      {/* Legend for Heatmap */}
+      {settings.showHeatmap && (
+        <div className="absolute bottom-4 right-4 bg-zinc-900/90 border border-gray-700 p-3 rounded-lg shadow-xl z-20 backdrop-blur-sm print:hidden">
+           <div className="flex justify-between items-center mb-2 gap-2">
+             <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider text-center">Skala SPL</h4>
+             <button 
+               onClick={() => setSplMode(m => m === 'Relative' ? 'Absolute' : 'Relative')}
+               className="text-[9px] font-bold bg-white/10 hover:bg-white/20 border border-white/20 px-2 py-0.5 rounded text-white transition-colors"
+             >
+               {splMode}
+             </button>
+           </div>
+           <div className="flex flex-col space-y-1">
+             <div className="flex items-center justify-between space-x-3">
+               <span className="text-[10px] text-gray-300 font-bold">{splMode === 'Relative' ? 'Keras (0 dB)' : `145 dB`}</span>
+               <div className="w-4 h-4 rounded-sm bg-[hsl(0,100%,50%)] border border-gray-600"></div>
+             </div>
+             <div className="flex items-center justify-between space-x-3">
+               <span className="text-[10px] text-gray-300 font-medium">{splMode === 'Relative' ? '-10 dB' : `135 dB`}</span>
+               <div className="w-4 h-4 rounded-sm bg-[hsl(68,100%,50%)] border border-gray-600"></div>
+             </div>
+             <div className="flex items-center justify-between space-x-3">
+               <span className="text-[10px] text-gray-300 font-medium">{splMode === 'Relative' ? '-20 dB' : `125 dB`}</span>
+               <div className="w-4 h-4 rounded-sm bg-[hsl(137,100%,50%)] border border-gray-600"></div>
+             </div>
+             <div className="flex items-center justify-between space-x-3">
+               <span className="text-[10px] text-gray-300 font-medium">{splMode === 'Relative' ? 'Hening (-35 dB)' : `110 dB`}</span>
+               <div className="w-4 h-4 rounded-sm bg-[hsl(240,100%,50%)] border border-gray-600"></div>
+             </div>
+           </div>
+           <div className="w-full h-1.5 mt-3 rounded-full bg-gradient-to-l from-[hsl(0,100%,50%)] via-[hsl(120,100%,50%)] to-[hsl(240,100%,50%)]" />
+        </div>
+      )}
 
       {/* Map Controls Overlay */}
       {onChangeSettings && (

@@ -56,6 +56,7 @@ export function AreaEditor({ areas, onChange, activeAreaId, onSelectArea, onClos
           <div className="grid grid-cols-2 gap-2">
             <button onClick={() => handleAddArea('Rectangle')} className="bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded border border-white/20 transition-colors text-white shadow-sm">Persegi</button>
             <button onClick={() => handleAddArea('Circle')} className="bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded border border-white/20 transition-colors text-white shadow-sm">Lingkaran</button>
+            <button onClick={() => handleAddArea('Semicircle')} className="bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded border border-white/20 transition-colors text-white shadow-sm col-span-2">Setengah Lingkaran</button>
             <button onClick={() => handleAddArea('Triangle')} className="bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded border border-white/20 transition-colors text-white shadow-sm">Segitiga</button>
             <button onClick={() => handleAddArea('Trapezoid')} className="bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded border border-white/20 transition-colors text-white shadow-sm">Trapesium</button>
           </div>
@@ -93,15 +94,15 @@ export function AreaEditor({ areas, onChange, activeAreaId, onSelectArea, onClos
                
                <div className="flex flex-col">
                  <span className="text-[10px] text-purple-300">Posisi X (m)</span>
-                 <input type="number" step="0.5" value={activeArea.x} onChange={e => handleUpdateActive({x: parseFloat(e.target.value) || 0})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
+                 <input type="number" step="0.5" value={activeArea.x} onChange={e => handleUpdateActive({x: e.target.value as any})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
                </div>
                <div className="flex flex-col">
                  <span className="text-[10px] text-purple-300">Posisi Y (m)</span>
-                 <input type="number" step="0.5" value={activeArea.y} onChange={e => handleUpdateActive({y: parseFloat(e.target.value) || 0})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
+                 <input type="number" step="0.5" value={activeArea.y} onChange={e => handleUpdateActive({y: e.target.value as any})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
                </div>
              </div>
 
-             {activeArea.shape === 'Circle' ? (
+             {activeArea.shape === 'Circle' || activeArea.shape === 'Semicircle' ? (
                <div className="flex flex-col col-span-2">
                  <span className="text-[10px] text-purple-300">Radius (m)</span>
                  <input type="number" step="0.5" min="0.1" value={activeArea.radius} onChange={e => handleUpdateActive({radius: parseFloat(e.target.value) || 0.1})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
@@ -137,7 +138,7 @@ export function AreaEditor({ areas, onChange, activeAreaId, onSelectArea, onClos
              <div className="grid grid-cols-2 gap-2">
                <div className="flex flex-col">
                  <span className="text-[10px] text-purple-300">Rotasi (derajat)</span>
-                 <input type="number" step="1" value={activeArea.rotation} onChange={e => handleUpdateActive({rotation: parseFloat(e.target.value) || 0})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
+                 <input type="number" step="1" value={activeArea.rotation} onChange={e => handleUpdateActive({rotation: e.target.value as any})} className="bg-black/20 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500/50" />
                </div>
                
                <div className="flex flex-col">

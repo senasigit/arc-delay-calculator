@@ -1,5 +1,35 @@
 import type { SubwooferSettings, BoxGroup, PhysicalBox, ArrayStats } from './types';
 
+// Hitung serapan udara (Air Absorption) dalam dB/m berdasarkan ISO 9613-1 / ASA S1.26
+export function calculateAirAbsorption(f: number, tempC: number, rh: number, pressureKPa = 101.325): number {
+    const T_kelvin = tempC + 273.15;
+    const T01 = 273.15;
+    
+    // Saturation vapor pressure ratio
+    const C = -6.8346 * Math.pow(T01 / T_kelvin, 1.261) + 4.6151;
+    const psat_pr = Math.pow(10, C);
+    
+    // Molar concentration of water vapor h (in percent)
+    const h = rh * psat_pr / (pressureKPa / 101.325);
+    
+    const T_ratio = T_kelvin / 293.15;
+    
+    // Oxygen & Nitrogen relaxation frequencies
+    const frO = (pressureKPa / 101.325) * (24 + 4.04e4 * h * (0.02 + h) / (0.391 + h));
+    const frN = (pressureKPa / 101.325) * Math.pow(T_ratio, -0.5) * (9 + 280 * h * Math.exp(-4.17 * (Math.pow(T_ratio, -1/3) - 1)));
+    
+    // Attenuation coefficient in dB/m
+    const alpha = 8.686 * Math.pow(f, 2) * (
+        1.84e-11 * Math.pow(pressureKPa / 101.325, -1) * Math.pow(T_ratio, 0.5) +
+        Math.pow(T_ratio, -2.5) * (
+            0.01275 * Math.exp(-2239.1 / T_kelvin) * frO / (Math.pow(frO, 2) + Math.pow(f, 2)) +
+            0.1068 * Math.exp(-3352.0 / T_kelvin) * frN / (Math.pow(frN, 2) + Math.pow(f, 2))
+        )
+    );
+    
+    return alpha;
+}
+
 export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: Set<number> = new Set(), disabledCardioidPositions: Set<number> = new Set()): { groups: BoxGroup[], stats: ArrayStats } {
   const { setupType, cardioid, cardioidReversedBoxes } = settings;
   const count = Number(settings.count) || 0;
@@ -22,6 +52,7 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
   const dimensionX = orientation === 'Landscape' ? width : depth;
   const dimensionY = orientation === 'Landscape' ? depth : width;
   const acousticCenterSpacing = dimensionX + gap;
+
   
   let totalArrayLength = 0;
   if (n % 2 === 0) {
@@ -75,14 +106,16 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
         const revIndex = isRowBased ? r : s;
         const isCardioidSetup = cardioid || setupType === 'Cardioid L/R';
         const isRear = !isEndFire && isCardioidSetup && !cardioidDisabled && cardioidReversedBoxes[revIndex] === true;
-        const boxZ = (s * Number(settings.height)) + (Number(settings.height) / 2);
+        const spacerSize = settings.cardioidSpacers ? (Number(settings.cardioidSpacerSize) || 0) : 0;
+        const boxZ = (s * (Number(settings.height) + spacerSize)) + (Number(settings.height) / 2);
         
         const rowPhysicalY = (isEndFire ? -r : r) * spacingY;
         const boxY = y + rowPhysicalY + (!isRowBased && isRear ? rearPhysicalY : 0); 
         
         let polarity = 1;
-        const isGradientBehavior = setupType === 'Gradient Array' || setupType === 'Cardioid L/R';
+        const isGradientBehavior = setupType.includes('Gradient') || setupType === 'Auto-Efficiency' || setupType === 'Pattern Implosion' || setupType === 'Cardioid L/R' || ((setupType === 'Curved Array' || setupType === 'Straight Delayed Array' || setupType === 'L/R') && settings.invertRearPolarity && isRowBased);
         if (isRear || (isGradientBehavior && isRowBased && r > 0)) {
+           // Standard Gradient/Cardioid relies on polarity inversion
            polarity = settings.invertRearPolarity ? -1 : 1;
         }
 
@@ -109,6 +142,9 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
            }
         }
         
+        const actualIsRear = positionLabel === 'REAR';
+        const isBoxMuted = (actualIsRear && settings.muteRear) || (!actualIsRear && settings.muteFront);
+        
         physicalBoxes.push({
           stackIndex: isRowBased ? (r * stackCount + s) : s,
           rowIndex: r,
@@ -118,7 +154,8 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
           z: boxZ,
           delayMs: boxDelayMs,
           polarity: polarity as 1 | -1,
-          isRear: isGradientBehavior ? false : isRear,
+          isRear: actualIsRear,
+          muted: isBoxMuted,
           positionLabel
         });
       }
@@ -137,8 +174,8 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
     });
   };
 
-  if (setupType === 'Arc Array' || setupType === 'Gradient Array' || setupType === 'End-Fire') {
-      // End-Fire Array also uses this distribution (X axis along stage)
+  if (setupType === 'Curved Array' || setupType === 'Straight Delayed Array' || setupType.includes('Gradient') || setupType === 'Auto-Efficiency' || setupType === 'Pattern Implosion' || setupType === 'End-Fire') {
+      // End-Fire and Gradient Arrays also use this distribution (X axis along stage)
       for (let i = 0; i < n; i++) {
         let x = 0;
         let label = '';
@@ -163,17 +200,23 @@ export function calculateArcDelay(settings: SubwooferSettings, mutedPositions: S
         
         let virtualY = 0;
         let delayMs = 0;
-        if (R > 0 && setupType === 'Arc Array') {
+        if (R > 0 && (setupType === 'Curved Array' || setupType === 'Straight Delayed Array')) {
           const rSquared = R * R;
           const xSquared = x * x;
           if (rSquared >= xSquared) {
-             virtualY = R - Math.sqrt(rSquared - xSquared);
-             delayMs = (virtualY / speedOfSound) * 1000;
+             const curveOffset = R - Math.sqrt(rSquared - xSquared);
+             if (setupType === 'Curved Array') {
+                virtualY = curveOffset; // Physically curved
+                delayMs = 0; // No electronic delay needed for curvature
+             } else {
+                virtualY = 0; // Physically straight
+                delayMs = (curveOffset / speedOfSound) * 1000; // Electronic delay for curvature
+             }
           }
         }
         createGroup(i, label, x, 0, virtualY, delayMs);
       }
-  } 
+  }
   else if (setupType === 'L/R' || setupType === 'Cardioid L/R' || setupType === 'End-Fire L/R') {
       const leftCount = n / 2;
       const rightCount = n / 2;
@@ -271,6 +314,7 @@ export function calculate2DSpatialHeatmap(
           if (group.muted) continue;
 
           for (const box of group.boxes) {
+            if (box.muted) continue;
             const dx = xMeters - box.x;
             const dy = yMeters - box.y; 
             const dz = EAR_HEIGHT - box.z; 

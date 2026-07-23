@@ -5,12 +5,15 @@ interface DataTableProps {
   cardioidEnabled: boolean;
   onToggleMute: (positionId: number) => void;
   onToggleCardioid: (positionId: number) => void;
+  isFrontMuted?: boolean;
+  isRearMuted?: boolean;
+  onToggleGlobalMute?: (type: 'front' | 'rear', mute: boolean) => void;
 }
 
-export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardioid }: DataTableProps) {
+export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardioid, isFrontMuted, isRearMuted, onToggleGlobalMute }: DataTableProps) {
   
   return (
-    <div className="w-full md:w-80 h-full bg-white/5 backdrop-blur-md border-l border-white/10 flex flex-col overflow-y-auto">
+    <div className="w-full h-full bg-white/5 backdrop-blur-md flex flex-col overflow-y-auto">
       <div className="p-4 border-b border-white/10 sticky top-0 bg-black/20 backdrop-blur-md z-10 print:static print:border-none print:p-0 print:mb-4 print:bg-transparent">
         <h2 className="text-lg font-bold text-white print:text-black">DSP Delay & Setup Table</h2>
         <p className="text-xs text-yellow-400 print:text-gray-600 mb-3">Instruksi Fisik dan Kalkulasi Delay (ms)</p>
@@ -23,17 +26,33 @@ export function DataTable({ groups, cardioidEnabled, onToggleMute, onToggleCardi
                  {groups.reduce((sum, group) => sum + group.boxes.length, 0)}
                </span>
             </div>
-            <div className="flex flex-col border-x border-white/10">
+            <div className="flex flex-col border-x border-white/10 relative">
                <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Front</span>
                <span className="text-xl font-bold text-zinc-200">
                  {groups.reduce((sum, group) => sum + group.boxes.filter(b => !b.isRear).length, 0)}
                </span>
+               {onToggleGlobalMute && (
+                 <button 
+                   onClick={() => onToggleGlobalMute('front', !isFrontMuted)}
+                   className={`absolute -top-1 right-2 text-[9px] px-1.5 py-0.5 rounded font-bold border ${isFrontMuted ? 'bg-red-900/50 text-red-400 border-red-800' : 'bg-gray-800 text-zinc-400 border-gray-700'}`}
+                 >
+                   {isFrontMuted ? 'MUTED' : 'Mute'}
+                 </button>
+               )}
             </div>
-            <div className="flex flex-col">
+            <div className="flex flex-col relative">
                <span className="text-[10px] text-amber-500 uppercase tracking-wider">Rear</span>
                <span className="text-xl font-bold text-amber-300">
                  {groups.reduce((sum, group) => sum + group.boxes.filter(b => b.isRear).length, 0)}
                </span>
+               {onToggleGlobalMute && (
+                 <button 
+                   onClick={() => onToggleGlobalMute('rear', !isRearMuted)}
+                   className={`absolute -top-1 right-2 text-[9px] px-1.5 py-0.5 rounded font-bold border ${isRearMuted ? 'bg-red-900/50 text-red-400 border-red-800' : 'bg-gray-800 text-amber-500 border-gray-700'}`}
+                 >
+                   {isRearMuted ? 'MUTED' : 'Mute'}
+                 </button>
+               )}
             </div>
           </div>
         )}

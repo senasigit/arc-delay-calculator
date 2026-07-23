@@ -5,6 +5,7 @@ import { DataTable } from './components/DataTable';
 import { ProjectModal } from './components/ProjectModal';
 import { AreaEditor } from './components/AreaEditor';
 import { AudioUtilities } from './components/AudioUtilities';
+import { AutoConfigModal } from './components/AutoConfigModal';
 import type { SubwooferSettings, ReportInfo, ProjectData, VenueArea } from './types';
 import { calculateArcDelay } from './utils';
 import { db } from './firebase';
@@ -12,7 +13,7 @@ import { doc, updateDoc } from 'firebase/firestore';
 
 function App() {
   const [settings, setSettings] = useState<SubwooferSettings>({
-    setupType: 'Arc Array',
+    setupType: 'Curved Array',
     stageWidth: '',
     count: '',
     preset: 'Custom',
@@ -36,10 +37,12 @@ function App() {
     resolution: 'Medium',
     showHeatmap: false,
     cardioid: false,
-    cardioidDelay: '',
+    cardioidDelay: 4,
     invertRearPolarity: true,
     endFireDelayStep: '',
     cardioidReversedBoxes: [],
+    cardioidSpacers: false,
+    cardioidSpacerSize: 0.15,
     rows: '',
   });
 
@@ -58,6 +61,7 @@ function App() {
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
   const [showAreaEditor, setShowAreaEditor] = useState(false);
   const [showUtility, setShowUtility] = useState(false);
+  const [showAutoConfig, setShowAutoConfig] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
 
@@ -129,6 +133,14 @@ function App() {
           defaultReportInfo={reportInfo} 
         />
       )}
+      {showAutoConfig && (
+        <AutoConfigModal 
+          currentSettings={settings}
+          areas={areas}
+          onClose={() => setShowAutoConfig(false)}
+          onApply={(updates) => setSettings(prev => ({ ...prev, ...updates }))}
+        />
+      )}
       <div className="flex w-screen h-screen overflow-hidden text-yellow-400 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-zinc-950 via-black to-zinc-900 print:block print:h-auto print:bg-white print:text-black flex-col lg:flex-row">
       
       {/* Mobile Top Nav / Tabs */}
@@ -150,6 +162,7 @@ function App() {
             onReportInfoChange={setReportInfo}
             activeProject={activeProject}
             onCloseProject={() => setActiveProject(null)}
+            onOpenAutoConfig={() => setShowAutoConfig(true)}
           />
         </div>
       </div>
@@ -271,6 +284,15 @@ function App() {
                 cardioidEnabled={settings.cardioid}
                 onToggleMute={handleToggleMute}
                 onToggleCardioid={handleToggleCardioid}
+                isFrontMuted={settings.muteFront}
+                isRearMuted={settings.muteRear}
+                onToggleGlobalMute={(type, mute) => {
+                  if (type === 'front') {
+                     setSettings(prev => ({...prev, muteFront: mute}));
+                  } else {
+                     setSettings(prev => ({...prev, muteRear: mute}));
+                  }
+                }}
               />
             </div>
           </div>
