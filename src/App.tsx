@@ -126,18 +126,18 @@ function App() {
           defaultReportInfo={reportInfo} 
         />
       )}
-      <div className="flex w-screen h-screen overflow-hidden text-yellow-400 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-zinc-950 via-black to-zinc-900 print:block print:h-auto print:bg-white print:text-black flex-col md:flex-row">
+      <div className="flex w-screen h-screen overflow-hidden text-yellow-400 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-zinc-950 via-black to-zinc-900 print:block print:h-auto print:bg-white print:text-black flex-col lg:flex-row">
       
       {/* Mobile Top Nav / Tabs */}
-      <div className="md:hidden flex bg-slate-900/50 backdrop-blur-md border-b border-slate-700 p-2 space-x-2 print:hidden z-20 shadow-md">
+      <div className="lg:hidden flex bg-slate-900/50 backdrop-blur-md border-b border-slate-700 p-2 space-x-2 print:hidden z-20 shadow-md">
          <button onClick={() => setActiveTab('setup')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>⚙️ Setup</button>
          <button onClick={() => setActiveTab('map')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🗺️ 2D Map</button>
          <button onClick={() => setActiveTab('dsp')} className={`flex-1 py-2 text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🎛️ DSP</button>
       </div>
 
       {/* Sidebar Kiri */}
-      <div className={`${activeTab === 'setup' ? 'flex-1 min-h-0' : 'hidden print:block'} md:flex-none md:block ${isLeftSidebarOpen ? 'w-full md:w-80 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 transition-all duration-300 print:hidden relative`}>
-        <div className="w-full md:w-80 h-full">
+      <div className={`${activeTab === 'setup' ? 'flex-1 min-h-0' : 'hidden print:block'} lg:flex-none lg:block ${isLeftSidebarOpen ? 'w-full lg:w-80 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 transition-all duration-300 print:hidden relative`}>
+        <div className="w-full lg:w-80 h-full">
           <Sidebar 
             settings={settings} 
             onChange={setSettings} 
@@ -151,7 +151,7 @@ function App() {
       </div>
       
       {/* Area Utama */}
-      <div className={`${activeTab === 'setup' ? 'hidden print:flex' : 'flex'} md:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
+      <div className={`${activeTab === 'setup' ? 'hidden print:flex' : 'flex'} lg:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
         
         {/* HEADER LAPORAN (HANYA TAMPIL SAAT DIPRINT ATAU DILIHAT DI PDF) */}
         <div className="hidden print:block mb-6 pt-4 border-b-2 border-gray-800 pb-4">
@@ -186,14 +186,14 @@ function App() {
         </div>
         
         {/* Area Map & Tabel */}
-        <div className="flex-1 flex flex-col md:flex-row print:block print:w-full h-full overflow-hidden">
+        <div className="flex-1 flex flex-col lg:flex-row print:block print:w-full h-full overflow-hidden">
           {/* Tengah: Visualizer Dinamis */}
-          <div className={`${activeTab === 'map' ? 'flex-1 min-h-0' : 'hidden print:flex'} md:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300 rounded-lg m-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-white/10`}>
+          <div className={`${activeTab === 'map' ? 'flex-1 min-h-0' : 'hidden print:flex'} lg:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300 rounded-lg m-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-white/10`}>
             
             {/* Toggle Left Sidebar Button */}
             <button 
               onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-              className="hidden md:flex absolute top-1/2 left-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-r-md border border-l-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
+              className="hidden lg:flex absolute top-1/2 left-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-r-md border border-l-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
               title={isLeftSidebarOpen ? "Hide Setup" : "Show Setup"}
             >
               {isLeftSidebarOpen ? '◀' : '▶'}
@@ -202,7 +202,7 @@ function App() {
             {/* Toggle Right Sidebar Button */}
             <button 
               onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-              className="hidden md:flex absolute top-1/2 right-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-l-md border border-r-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
+              className="hidden lg:flex absolute top-1/2 right-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-l-md border border-r-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
               title={isRightSidebarOpen ? "Hide DSP" : "Show DSP"}
             >
               {isRightSidebarOpen ? '▶' : '◀'}
@@ -240,8 +240,8 @@ function App() {
           </div>
 
           {/* Kanan: Tabel Data */}
-          <div className={`${activeTab === 'dsp' ? 'flex-1 min-h-0' : 'hidden print:block'} md:block ${isRightSidebarOpen ? 'w-full md:w-96 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 border-l border-white/10 bg-slate-900/40 backdrop-blur-md print:w-full print:border-none transition-all duration-300 relative`}>
-            <div className="w-full md:w-96 h-full overflow-y-auto">
+          <div className={`${activeTab === 'dsp' ? 'flex-1 min-h-0' : 'hidden print:block'} lg:flex-none lg:block ${isRightSidebarOpen ? 'w-full lg:w-96 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 border-l border-white/10 bg-slate-900/40 backdrop-blur-md print:w-full print:border-none transition-all duration-300 relative`}>
+            <div className="w-full lg:w-96 h-full overflow-y-auto">
               <DataTable 
                 groups={groups} 
                 cardioidEnabled={settings.cardioid}
