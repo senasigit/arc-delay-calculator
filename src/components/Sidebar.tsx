@@ -269,7 +269,15 @@ export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoCha
                   <input id="stack" type="number" name="stack" min="1" step="1" max="6" value={settings.stack} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300" />
                 </div>
                 <div className="flex flex-col">
-                  <label htmlFor="gap" className="text-xs font-medium text-purple-400 mb-1">{settings.setupType.includes('End-Fire') ? 'Jarak Baris (Gap) m' : 'Sub Gap m'}</label>
+                  <label htmlFor="rows" className="text-xs font-medium text-purple-400 mb-1">Rows (Baris Belakang)</label>
+                  <input id="rows" type="number" name="rows" min="1" step="1" max="10" value={settings.rows} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300" />
+                </div>
+                <div className="flex flex-col">
+                  <label htmlFor="rowSpacing" className="text-xs font-medium text-purple-400 mb-1">Jarak Baris (m)</label>
+                  <input id="rowSpacing" type="number" name="rowSpacing" min="0" step="0.05" value={settings.rowSpacing} onChange={handleChange} placeholder="Auto" className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
+                </div>
+                <div className="flex flex-col">
+                  <label htmlFor="gap" className="text-xs font-medium text-purple-400 mb-1">Sub Gap (m)</label>
                   <input id="gap" type="number" name="gap" min="0" step="0.05" value={settings.gap} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
                 </div>
                 <div className="flex flex-col col-span-2">
