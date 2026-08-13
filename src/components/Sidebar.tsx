@@ -1,8 +1,20 @@
-import { useState, useEffect } from 'react';
-import type { SubwooferSettings, ArrayStats, SubwooferPreset, ReportInfo } from '../types';
+import { useState, useEffect, useMemo } from 'react';
+import type { SubwooferSettings, ArrayStats, SubwooferPreset, ReportInfo, SetupType, VenueArea, BoxGroup } from '../types';
+import { DEFAULT_SETTINGS } from '../types';
 import { db } from '../firebase';
 import { collection, addDoc, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
-import { calculateAirAbsorption } from '../utils';
+import {
+  calculateAirAbsorption,
+  calculateSpeedOfSound,
+  formatMeters,
+  DEFAULT_SPEED_OF_SOUND,
+  DEFAULT_TEMPERATURE_C,
+  MIN_TARGET_FREQ_HZ,
+  SANE_LENGTH_M,
+  SANE_SPACING_M,
+  calculateCoverageAnalysis,
+} from '../utils';
+import { fetchLocalWeather } from '../weather';
 
 interface SidebarProps {
   settings: SubwooferSettings;
@@ -10,609 +22,1075 @@ interface SidebarProps {
   stats: ArrayStats;
   reportInfo: ReportInfo;
   onReportInfoChange: (info: ReportInfo) => void;
-  activeProject?: any;
-  onCloseProject?: () => void;
-  onOpenAutoConfig?: () => void;
+  /** Untuk panel analisis coverage; opsional agar Sidebar tetap bisa dipakai sendiri. */
+  areas?: VenueArea[];
+  groups?: BoxGroup[];
 }
 
-export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoChange, onCloseProject, onOpenAutoConfig }: SidebarProps) {
-  const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
-  const [openPanels, setOpenPanels] = useState<Record<number, boolean>>({
-    1: true,
-    2: false,
-    3: false,
-    4: false,
-    5: true,
-    6: false,
-  });
+type NumericField = keyof SubwooferSettings;
 
-  const togglePanel = (panel: number) => {
-    setOpenPanels(prev => ({ ...prev, [panel]: !prev[panel] }));
-  };
+const n = (v: unknown, fallback = 0) => {
+  const parsed = Number(v);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/**
+ * Dimensi box pada sumbu array (horizontal), mengikuti orientasi. Rotasi
+ * Landscape↔Portrait memutar box 90° pada sumbu depth-nya, menukar Width dan
+ * Height — BUKAN Width dan Depth. Ini mengikuti persis tabel lookup dimensi
+ * pada kalkulator arc delay resmi (kolom Height/Width tertukar via VLOOKUP
+ * orientasi; Depth tidak pernah dipakai untuk sumbu array sama sekali).
+ */
+const dimX = (s: SubwooferSettings) => (s.orientation === 'Landscape' ? n(s.width) : n(s.height));
+/** Dimensi box pada sumbu kedalaman (jarak ke audiens) — tidak berubah oleh orientasi. */
+const dimY = (s: SubwooferSettings) => n(s.depth);
+
+const speedOf = (s: SubwooferSettings) => n(s.speedOfSound) || DEFAULT_SPEED_OF_SOUND;
+
+/**
+ * Satu pintu masuk untuk semua perubahan setting, supaya nilai turunan
+ * (central gap ↔ sub gap, kecepatan suara ↔ suhu, batas baris per tipe
+ * setup) selalu konsisten dari mana pun perubahan datang.
+ *
+ * Sub Gap dan Central Gap saling mengikuti, tapi NILAINYA BEDA: Central Gap
+ * = Sub Gap + lebar box, karena central gap adalah jarak pusat-ke-pusat
+ * (sudah termasuk badan box), sedangkan sub gap adalah celah kosong saja.
+ * Mengedit salah satu otomatis menghitung ulang yang lain lewat lebar box
+ * saat ini, supaya array tetap seragam tanpa perlu disetel manual dua kali.
+ */
+function applyChange(prev: SubwooferSettings, name: NumericField, rawValue: unknown): SubwooferSettings {
+  const next = { ...prev, [name]: rawValue } as SubwooferSettings;
+
+  // Suhu / kelembapan → kecepatan suara
+  if (name === 'temperature' || name === 'humidity') {
+    const t = n(name === 'temperature' ? rawValue : prev.temperature, DEFAULT_TEMPERATURE_C);
+    const rh = n(name === 'humidity' ? rawValue : prev.humidity, 50);
+    next.speedOfSound = Number(calculateSpeedOfSound(t === 0 && next.temperature === '' ? DEFAULT_TEMPERATURE_C : t, rh).toFixed(1));
+  }
+
+  // Sub gap / dimensi / orientasi → central gap ikut menyesuaikan (array seragam)
+  if (name === 'gap' || name === 'width' || name === 'height' || name === 'orientation') {
+    next.centralGap = Number((n(next.gap) + dimX(next)).toFixed(3));
+    if (name === 'gap') next.targetFrequency = '';
+  }
+
+  // Central gap diedit langsung → sub gap ikut menyesuaikan (dikurangi lebar box)
+  if (name === 'centralGap') {
+    const gap = Math.max(0, n(next.centralGap) - dimX(next));
+    next.gap = Number(gap.toFixed(3));
+    next.centralGap = Number((gap + dimX(next)).toFixed(3));
+    next.targetFrequency = '';
+  }
+
+  // Frekuensi target → jarak pusat = λ/4 (array tetap koheren sampai 2× target)
+  const retargets =
+    (name === 'targetFrequency' && rawValue !== '') ||
+    ((name === 'speedOfSound' || name === 'temperature' || name === 'humidity') && next.targetFrequency !== '');
+  if (retargets) {
+    const f = n(next.targetFrequency);
+    // Di bawah MIN_TARGET_FREQ_HZ, λ/4 membesar sangat cepat (mendekati 0 Hz
+    // → mendekati tak terhingga). Nilai transien saat mengetik ulang field
+    // ini (mis. "0.005" sesaat sebelum jadi "63") tidak boleh ikut menghitung
+    // ulang gap, atau sub gap bisa "meledak" ke ratusan ribu meter.
+    if (f >= MIN_TARGET_FREQ_HZ) {
+      const quarter = speedOf(next) / f / 4;
+      const gap = Math.max(0, quarter - dimX(next));
+      next.gap = Number(gap.toFixed(3));
+      next.centralGap = Number((gap + dimX(next)).toFixed(3));
+    }
+  }
+
+  if (name === 'setupType') {
+    Object.assign(next, setupDefaults(rawValue as SetupType, next));
+  }
+
+  if (name === 'rows') {
+    const max = maxRowsFor(next.setupType);
+    if (n(next.rows) > max) next.rows = max;
+  }
+
+  return next;
+}
+
+const maxRowsFor = (setup: SetupType) => {
+  if (setup.includes('End-Fire')) return 8;
+  if (setup === 'Gradient Inverted Stack') return 1;
+  return 2;
+};
+
+/**
+ * Setiap tipe setup punya syarat susunan minimum. Tanpa ini, memilih
+ * "Gradient In-Line" dengan 1 baris menghasilkan array biasa yang diam-diam
+ * tidak melakukan apa pun.
+ */
+function setupDefaults(setup: SetupType, s: SubwooferSettings): Partial<SubwooferSettings> {
+  const out: Partial<SubwooferSettings> = {};
+  const max = maxRowsFor(setup);
+  if (n(s.rows) > max) out.rows = max;
+
+  if (setup.includes('End-Fire')) {
+    if (n(s.rows) < 2) out.rows = 4;
+    out.cardioid = false;
+    // Jarak antar elemen End-Fire = 1/4 λ pada frekuensi target
+    if (s.rowSpacing === '' && n(s.targetFrequency) >= MIN_TARGET_FREQ_HZ) {
+      out.rowSpacing = Number((speedOf(s) / n(s.targetFrequency) / 4).toFixed(3));
+    }
+  } else if (setup === 'Gradient In-Line' || setup === 'Cardioid L/R' || setup === 'Auto-Efficiency' || setup === 'Pattern Implosion') {
+    out.rows = 2;
+    out.cardioid = true;
+    out.invertRearPolarity = true;
+    if (s.rowSpacing === '' && n(s.targetFrequency) >= MIN_TARGET_FREQ_HZ) {
+      out.rowSpacing = Number((speedOf(s) / n(s.targetFrequency) / 4).toFixed(3));
+    }
+  } else if (setup === 'Gradient Inverted Stack') {
+    out.rows = 1;
+    out.cardioid = true;
+    out.invertRearPolarity = true;
+    if (n(s.stack) < 2) out.stack = 3;
+    if (!s.cardioidReversedBoxes.some(Boolean)) {
+      out.cardioidReversedBoxes = [true, false, false];
+    }
+  }
+  return out;
+}
+
+/**
+ * Panel & LambdaSelect sengaja didefinisikan di luar Sidebar. Komponen yang
+ * dibuat ulang setiap render akan di-unmount–mount oleh React sehingga input di
+ * dalamnya kehilangan fokus tiap ketukan tombol.
+ */
+function Panel({
+  id,
+  title,
+  isOpen,
+  onToggle,
+  children,
+}: {
+  id: number;
+  title: string;
+  isOpen: boolean;
+  onToggle: (id: number) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="panel">
+      <button className="panel-head" onClick={() => onToggle(id)} aria-expanded={isOpen}>
+        <span className="flex items-center gap-2">
+          <span className="panel-index">{id}</span>
+          {title}
+        </span>
+        <span className="text-ink-3 text-[10px]">{isOpen ? '▲' : '▼'}</span>
+      </button>
+      {isOpen && <div className="panel-body">{children}</div>}
+    </section>
+  );
+}
+
+function LambdaSelect({
+  value,
+  targetF,
+  c,
+  isTime = false,
+  onPick,
+  label,
+}: {
+  value: number;
+  targetF: number;
+  c: number;
+  isTime?: boolean;
+  onPick: (v: number) => void;
+  label: string;
+}) {
+  const base = isTime ? (1 / targetF) * 1000 : c / targetF;
+  const fraction = base ? value / base : 0;
+  const match = [0.25, 0.5, 2 / 3, 1].find((f) => Math.abs(fraction - f) < 0.015);
+
+  return (
+    <select
+      className="select mt-1 min-h-0 py-1 text-[11px]"
+      value={match ? String(match) : 'custom'}
+      onChange={(e) => {
+        const f = Number(e.target.value);
+        if (Number.isFinite(f)) onPick(Number((base * f).toFixed(3)));
+      }}
+      aria-label={label}
+    >
+      {!match && (
+        <option value="custom">
+          ≈ {fraction.toFixed(2)} λ @ {targetF} Hz
+        </option>
+      )}
+      <option value="0.25">¼ λ @ {targetF} Hz</option>
+      <option value="0.5">½ λ @ {targetF} Hz</option>
+      <option value={String(2 / 3)}>⅔ λ @ {targetF} Hz</option>
+      <option value="1">1 λ @ {targetF} Hz</option>
+    </select>
+  );
+}
+
+export function Sidebar({ settings, onChange, stats, reportInfo, onReportInfoChange, areas = [], groups = [] }: SidebarProps) {
+  const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
+  const [open, setOpen] = useState<Record<number, boolean>>({ 1: true, 2: true, 3: true, 4: false, 5: false, 6: false, 7: false });
+  // Menyimpan teks mentah agar mengetik "1." atau "0.0" tidak dipotong parser.
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [throwDistance, setThrowDistance] = useState(50);
+  const [weather, setWeather] = useState<{ status: 'idle' | 'loading' | 'error'; message?: string }>({ status: 'idle' });
+
+  const toggle = (panel: number) => setOpen((p) => ({ ...p, [panel]: !p[panel] }));
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'presets'), (snapshot) => {
-      const presetsData: SubwooferPreset[] = [];
-      snapshot.forEach(document => {
-         presetsData.push({ id: document.id, ...document.data() } as SubwooferPreset);
-      });
-      setSavedPresets(presetsData);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'presets'),
+      (snapshot) => {
+        setSavedPresets(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as SubwooferPreset));
+      },
+      (err) => console.error('Gagal memuat preset', err)
+    );
     return () => unsubscribe();
   }, []);
 
-  const handleSavePreset = async () => {
-    const name = window.prompt('Masukkan Nama Preset Baru (Contoh: "Custom 18 Inch"):');
-    if (!name || name.trim() === '') return;
-    const newPreset = { name: name.trim(), width: settings.width, height: settings.height, depth: settings.depth, defaultCardioidDelay: Number(settings.cardioidDelay) || 0 };
+  const set = (name: NumericField, value: unknown) => onChange(applyChange(settings, name, value));
+
+  /** Isi suhu & kelembapan dari cuaca terkini di lokasi perangkat. */
+  const loadWeather = async () => {
+    setWeather({ status: 'loading' });
     try {
-      const docRef = await addDoc(collection(db, 'presets'), newPreset);
+      const reading = await fetchLocalWeather();
+      onChange({
+        ...settings,
+        temperature: reading.temperature,
+        humidity: reading.humidity,
+        speedOfSound: Number(calculateSpeedOfSound(reading.temperature, reading.humidity).toFixed(1)),
+      });
+      setWeather({ status: 'idle' });
+    } catch (e) {
+      setWeather({ status: 'error', message: e instanceof Error ? e.message : 'Gagal membaca cuaca.' });
+    }
+  };
+
+  /** Input angka yang tetap nyaman diketik (mendukung "1.", "-", desimal). */
+  const numberProps = (name: NumericField, opts: { step?: string; min?: string; max?: string; placeholder?: string } = {}) => ({
+    type: 'number' as const,
+    inputMode: 'decimal' as const,
+    name: String(name),
+    id: String(name),
+    value: draft[name as string] ?? (settings[name] as number | '' ?? ''),
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+      const raw = e.target.value;
+      setDraft((d) => ({ ...d, [name]: raw }));
+      if (raw === '') set(name, '');
+      else {
+        const parsed = parseFloat(raw);
+        if (Number.isFinite(parsed)) set(name, parsed);
+      }
+    },
+    onBlur: () => setDraft((d) => {
+      const copy = { ...d };
+      delete copy[name as string];
+      return copy;
+    }),
+    ...opts,
+  });
+
+  const c = speedOf(settings);
+  const targetF = n(settings.targetFrequency) || n(settings.frequency) || 63;
+  const isLR = settings.setupType.includes('L/R');
+  const isEndFire = settings.setupType.includes('End-Fire');
+  const isGradientSetup =
+    settings.setupType.includes('Gradient') ||
+    settings.setupType === 'Cardioid L/R' ||
+    settings.setupType === 'Auto-Efficiency' ||
+    settings.setupType === 'Pattern Implosion';
+  const rowsCount = Math.max(1, n(settings.rows, 1) || 1);
+  const stackCount = Math.max(1, n(settings.stack, 1) || 1);
+  const showCardioidPanel = !isEndFire && (isGradientSetup || settings.cardioid || stackCount > 1);
+  const usesStackReversal = rowsCount === 1 && (settings.cardioid || isGradientSetup);
+  const showTheta = ['Curved Array', 'Straight Delayed Array', 'Auto-Efficiency', 'Pattern Implosion'].includes(
+    settings.setupType
+  );
+
+  const aliasingFromTarget = useMemo(() => {
+    const spacing = n(settings.gap) + dimX(settings);
+    return spacing > 0 ? c / (2 * spacing) : 0;
+  }, [settings, c]);
+
+  const lambdaProps = (name: NumericField, isTime = false) => ({
+    value: n(settings[name]),
+    targetF,
+    c,
+    isTime,
+    onPick: (v: number) => set(name, v),
+    label: `Setel ${String(name)} sebagai pecahan panjang gelombang`,
+  });
+
+  const handleSavePreset = async () => {
+    const name = window.prompt('Nama preset baru (contoh: "Custom 18 inch"):');
+    if (!name?.trim()) return;
+    try {
+      const docRef = await addDoc(collection(db, 'presets'), {
+        name: name.trim(),
+        width: n(settings.width),
+        height: n(settings.height),
+        depth: n(settings.depth),
+        defaultCardioidDelay: n(settings.cardioidDelay),
+        sensitivity: n(settings.boxSensitivity),
+      });
       onChange({ ...settings, preset: docRef.id });
     } catch (e) {
-      console.error('Error adding preset', e);
-      alert('Gagal menyimpan ke Cloud Firestore.');
+      console.error(e);
+      alert('Gagal menyimpan preset ke cloud.');
     }
   };
 
   const handleDeletePreset = async (id: string) => {
-    if (!window.confirm('Hapus preset ini secara permanen dari Cloud?')) return;
+    if (!window.confirm('Hapus preset ini secara permanen?')) return;
     try {
       await deleteDoc(doc(db, 'presets', id));
       if (settings.preset === id) onChange({ ...settings, preset: 'Custom' });
     } catch (e) {
-      console.error('Error deleting', e);
-      alert('Gagal menghapus dari Cloud Firestore.');
+      console.error(e);
+      alert('Gagal menghapus preset.');
     }
   };
 
-  const renderLambdaHelper = (name: keyof typeof settings, val: string | number, colorClass: string = 'text-blue-300/60', isTime: boolean = false) => {
-    const f = Number(settings.targetFrequency) || 63;
-    const c = Number(settings.speedOfSound) || 343.0;
-    const lambda = c / f;
-    const periodMs = (1 / f) * 1000;
-    
-    const baseVal = isTime ? periodMs : lambda;
-    const d = Number(val);
-    const fraction = d ? (d / baseVal) : 0;
-    
-    const setFraction = (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const frac = Number(e.target.value);
-      if (!frac || isNaN(frac)) return;
-      const newVal = (baseVal * frac).toFixed(isTime ? 1 : 2);
-      onChange({ ...settings, [name]: newVal });
+  const handlePresetSelect = (value: string) => {
+    const preset = savedPresets.find((p) => p.id === value);
+    if (!preset || value === 'Custom') {
+      onChange({ ...settings, preset: value });
+      return;
+    }
+    const merged: SubwooferSettings = {
+      ...settings,
+      preset: value,
+      width: preset.width,
+      height: preset.height,
+      depth: preset.depth,
+      cardioidDelay: preset.defaultCardioidDelay ?? settings.cardioidDelay,
+      boxSensitivity: preset.sensitivity ?? settings.boxSensitivity,
     };
-
-    const isQuarter = Math.abs(fraction - 0.25) < 0.02;
-    const isHalf = Math.abs(fraction - 0.5) < 0.02;
-    const isTwoThird = Math.abs(fraction - 0.6667) < 0.02;
-    const isFull = Math.abs(fraction - 1.0) < 0.02;
-
-    let selectValue = "custom";
-    if (isQuarter) selectValue = "0.25";
-    else if (isHalf) selectValue = "0.5";
-    else if (isTwoThird) selectValue = "0.6667";
-    else if (isFull) selectValue = "1";
-
-    return (
-      <div className="flex items-center mt-1 w-full">
-        <select value={selectValue} onChange={setFraction} className={`w-full bg-black/20 border border-white/5 rounded px-1 py-0.5 outline-none cursor-pointer text-[9px] ${colorClass} font-bold opacity-80 hover:opacity-100 transition-opacity`}>
-          {selectValue === 'custom' && <option value="custom" className="bg-zinc-900">≈ {fraction.toFixed(2)} λ @ {f}Hz</option>}
-          <option value="0.25" className="bg-zinc-900 text-white">1/4 λ @ {f}Hz</option>
-          <option value="0.5" className="bg-zinc-900 text-white">1/2 λ @ {f}Hz</option>
-          <option value="0.6667" className="bg-zinc-900 text-white">2/3 λ @ {f}Hz</option>
-          <option value="1" className="bg-zinc-900 text-white">1 λ @ {f}Hz</option>
-        </select>
-      </div>
-    );
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value, type } = e.target;
-    
-    if (type === 'checkbox') {
-      const checked = (e.target as HTMLInputElement).checked;
-      onChange({ ...settings, [name]: checked });
-      return;
-    }
-
-    if (name === 'preset') {
-      const selected = savedPresets.find(p => p.id === value);
-      if (selected && value !== 'Custom') {
-        const dim = settings.orientation === 'Landscape' ? Number(selected.width) : Number(selected.depth);
-        onChange({ 
-          ...settings, 
-          preset: value, 
-          width: selected.width, 
-          height: selected.height, 
-          depth: selected.depth,
-          cardioidDelay: selected.defaultCardioidDelay !== undefined ? selected.defaultCardioidDelay : settings.cardioidDelay,
-          centralGap: Number(settings.gap) + dim
-        });
-      } else {
-        onChange({ ...settings, preset: value });
-      }
-      return;
-    }
-
-    let parsedValue: string | number = value;
-    if (type === 'number') {
-      parsedValue = value === '' ? '' : (parseFloat(value) || 0);
-    }
-
-    const newSettings = { ...settings, [name]: parsedValue };
-
-    if (name === 'temperature' || name === 'humidity') {
-       const t = name === 'temperature' ? Number(parsedValue) : Number(settings.temperature);
-       
-       // Formula from Merlijn van Veen - Sonic Atmosphere (Equation 3):
-       // c = 331.3 * Math.sqrt(1 + (T / 273.15))
-       // Humidity has a negligible effect (< 0.3%) so we can ignore it for practical purposes.
-       const c = 331.3 * Math.sqrt(1 + (t / 273.15));
-       newSettings.speedOfSound = parseFloat(c.toFixed(2));
-    }
-
-    if (name === 'gap' || name === 'width' || name === 'depth' || name === 'orientation') {
-      const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
-      newSettings.centralGap = Number(newSettings.gap) + dim;
-      if (name === 'gap') newSettings.targetFrequency = '';
-    }
-
-    if (name === 'centralGap') {
-      const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
-      newSettings.gap = Math.max(0, Number(newSettings.centralGap) - dim);
-      newSettings.centralGap = newSettings.gap + dim;
-      newSettings.targetFrequency = '';
-    }
-    
-    if (name === 'targetFrequency' && value) {
-      const freq = Number(value);
-      if (freq > 0) {
-        newSettings.centralGap = (Number(newSettings.speedOfSound) / freq) / 4;
-        const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
-        newSettings.gap = Math.max(0, newSettings.centralGap - dim);
-        newSettings.centralGap = newSettings.gap + dim;
-      }
-    } else if ((name === 'speedOfSound' || name === 'temperature' || name === 'humidity') && newSettings.targetFrequency) {
-      // If speed of sound changes (manually or via temp/hum), update gap if locked to targetFrequency
-      const freq = Number(newSettings.targetFrequency);
-      if (freq > 0) {
-        newSettings.centralGap = (Number(newSettings.speedOfSound) / freq) / 4;
-        const dim = newSettings.orientation === 'Landscape' ? Number(newSettings.width) : Number(newSettings.depth);
-        newSettings.gap = Math.max(0, newSettings.centralGap - dim);
-        newSettings.centralGap = newSettings.gap + dim;
-      }
-    }
-
-    // Force Rear Invert for Gradient
-    const isGradientBehavior = newSettings.setupType.includes('Gradient') || newSettings.setupType === 'Auto-Efficiency' || newSettings.setupType === 'Pattern Implosion';
-    if (isGradientBehavior) {
-       newSettings.invertRearPolarity = true;
-    }
-
-    // Force max rows based on setupType
-    if (name === 'setupType' || name === 'rows') {
-      let maxAllowed = 2;
-      if (newSettings.setupType.includes('End-Fire')) maxAllowed = 10;
-      else if (newSettings.setupType === 'Gradient In-Line') maxAllowed = 2;
-      else if (newSettings.setupType === 'Gradient Inverted Stack') maxAllowed = 1;
-      else if (newSettings.setupType === 'Curved Array') maxAllowed = 2;
-      else maxAllowed = 2;
-      
-      if (Number(newSettings.rows) > maxAllowed) {
-        newSettings.rows = maxAllowed;
-      }
-    }
-
-    onChange(newSettings);
+    onChange(applyChange(merged, 'width', preset.width));
   };
 
   const handleReset = () => {
-    if (window.confirm("Apakah Anda yakin ingin mereset semua nilai konfigurasi? Semua parameter akan dikosongkan.")) {
-      onChange({
-        setupType: 'Curved Array',
-        preset: 'Custom',
-        count: '',
-        rows: '',
-        stack: '',
-        gap: '',
-        centralGap: '',
-        rowSpacing: '',
-        rowGap: '',
-        theta: '',
-        width: '',
-        height: '',
-        depth: '',
-        orientation: 'Landscape',
-        arrayFacing: 'Right',
-        speedOfSound: '',
-        temperature: '',
-        humidity: 50,
-        frequency: 63,
-        targetFrequency: '',
-        bandwidth: '1/3 Octave',
-        resolution: 'Medium',
-        showHeatmap: false,
-        cardioid: false,
-        cardioidDelay: '',
-        invertRearPolarity: false,
-        endFireDelayStep: '',
-        cardioidReversedBoxes: [],
-        cardioidSpacers: false,
-        cardioidSpacerSize: 0.15,
-        stageWidth: '',
-      });
-    }
+    if (!window.confirm('Kosongkan seluruh parameter konfigurasi?')) return;
+    setDraft({});
+    onChange({ ...DEFAULT_SETTINGS, count: '', gap: '', centralGap: '', cardioidDelay: '' });
   };
 
-  const handlePrint = () => window.print();
+  // Analisis coverage menghitung ratusan titik sampel, jadi hanya dijalankan
+  // saat panelnya benar-benar dibuka.
+  const coverage = useMemo(
+    () => (open[7] && areas.length && groups.length ? calculateCoverageAnalysis(settings, groups, areas) : null),
+    [open, areas, groups, settings]
+  );
+
+  const recommendedDelay = stats.recommendedCardioidDelay ?? 0;
+  const airLoss = calculateAirAbsorption(10000, n(settings.temperature, DEFAULT_TEMPERATURE_C) || DEFAULT_TEMPERATURE_C, n(settings.humidity, 50) || 50);
 
   return (
-    <div className="w-full md:w-80 h-full bg-slate-900/40 backdrop-blur-md md:border-r border-white/10 flex flex-col overflow-y-auto">
-      <div className="p-6 pb-2">
-        <div className="flex justify-between items-start mb-2">
-           <div className="flex items-center cursor-pointer group" onClick={() => alert("Sub Forge\nCreated by Sena Sigit\nInstagram: @senatarium\nCopyright 2026")}>
-             <img src="/logo.png" alt="Sub Forge Logo" className="w-8 h-8 mr-2 group-hover:scale-110 transition-transform object-contain" />
-             <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 leading-tight drop-shadow-lg tracking-tight">Sub Forge</h1>
-           </div>
-           <div className="flex flex-col space-y-2">
-             <div className="flex space-x-2">
-               {onOpenAutoConfig && (
-                 <button onClick={onOpenAutoConfig} className="bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-xs font-bold transition-colors border border-indigo-400 shadow shadow-indigo-500/50 flex-1">
-                    🤖 Sena
-                 </button>
-               )}
-               {onCloseProject && (
-                 <button onClick={onCloseProject} className="bg-yellow-600 hover:bg-yellow-500 text-black px-2 py-1 rounded text-xs font-bold transition-colors border border-yellow-500 shadow flex-1">
-                    📁 Open
-                 </button>
-               )}
-               <button onClick={handleReset} className="bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded text-xs font-bold transition-colors border border-red-500 shadow flex-1">
-                  🗑️ Reset
-               </button>
-             </div>
-             <button onClick={handlePrint} className="bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded text-xs font-bold text-white transition-colors border border-gray-600 shadow w-full">
-                Export PDF
-             </button>
-           </div>
-        </div>
-        <p className="text-xs text-yellow-500 font-bold flex items-center mb-4">
-           <span className="w-2 h-2 rounded-full bg-yellow-500 mr-2 animate-pulse"></span> Cloud Synced
-        </p>
-
-        {Number(settings.count) > 1 && (
-          <div className="mb-4 bg-gradient-to-r from-zinc-900/90 to-black border-yellow-500/30 p-4 rounded-xl border border-slate-500/50 space-y-2 shadow-lg backdrop-blur-md">
-            <div className="flex justify-between items-center">
-               <span className="text-xs text-yellow-400">Total Panjang Array</span>
-               <span className="text-sm font-semibold text-yellow-400">{stats.totalArrayLength.toFixed(2)} m</span>
+    <div className="w-full h-full bg-panel lg:border-r border-line flex flex-col min-h-0">
+      {/* Ringkasan array */}
+      <div className="flex-none px-3 pt-3 pb-2 border-b border-line">
+        {n(settings.count) > 0 ? (
+          <dl className="panel bg-raised p-2.5 space-y-1.5">
+            <div className="stat-row">
+              <dt>Panjang array</dt>
+              <dd className={stats.totalArrayLength > SANE_LENGTH_M ? 'text-danger' : ''}>
+                {formatMeters(stats.totalArrayLength)}
+              </dd>
             </div>
-            <div className="flex justify-between items-center">
-               <span className="text-xs text-yellow-400">Jarak Pusat (S-center)</span>
-               <span className="text-sm font-semibold text-amber-100">{stats.acousticCenterSpacing.toFixed(2)} m</span>
+            <div className="stat-row">
+              <dt>Jarak pusat akustik</dt>
+              <dd className={stats.acousticCenterSpacing > SANE_SPACING_M ? 'text-danger' : ''}>
+                {formatMeters(stats.acousticCenterSpacing)}
+              </dd>
             </div>
-            <div className="flex justify-between items-center">
-               <span className="text-xs text-yellow-400">Batas Freq Atas</span>
-               <span className="text-sm font-semibold text-amber-500">{stats.upperFreqLimit.toFixed(0)} Hz</span>
+            <div className="stat-row">
+              <dt title="Di atas frekuensi ini muncul grating lobe (spatial aliasing)">Batas aliasing</dt>
+              <dd className={stats.upperFreqLimit < 80 ? 'text-warn' : ''}>
+                {Number.isFinite(stats.upperFreqLimit) ? `${stats.upperFreqLimit.toFixed(0)} Hz` : '—'}
+              </dd>
             </div>
-            {settings.setupType === 'Curved Array' && Number(settings.theta) > 0 && (
-              <div className="pt-2 border-t border-slate-500/50 mt-2">
-                <span className="text-[10px] text-fuchsia-400 font-bold block mb-1">Beaming Frequencies (Curved Array)</span>
-                <div className="flex justify-between text-[10px] text-fuchsia-300">
-                  <span title="F1: Vertical beamwidth equals nominal">F1: {Math.round((21 * 1000) / (stats.totalArrayLength * Math.pow(Number(settings.theta), 0.935)))} Hz</span>
-                  <span title="F2: Vertical beamwidth 1/3 narrower">F2: {Math.round((42 * 1000) / (stats.totalArrayLength * Math.pow(Number(settings.theta), 0.935)))} Hz</span>
-                  <span title="F3: Vertical beamwidth recovers">F3: {Math.round((189 * 1000) / (stats.totalArrayLength * Math.pow(Number(settings.theta), 0.935)))} Hz</span>
-                </div>
+            {stats.arcRadius > 0 && (
+              <div className="stat-row">
+                <dt>
+                  {settings.setupType === 'Curved Array' ? 'Radius busur / mundur fisik maks' : 'Radius busur / delay tepi maks'}
+                </dt>
+                <dd>
+                  {formatMeters(stats.arcRadius)} /{' '}
+                  {settings.setupType === 'Curved Array'
+                    ? formatMeters(stats.maxArcOffset)
+                    : `${((stats.maxArcOffset / c) * 1000).toFixed(2)} ms`}
+                </dd>
               </div>
             )}
-          </div>
+          </dl>
+        ) : (
+          <p className="section-note">Isi jumlah box dan dimensi untuk mulai menghitung.</p>
+        )}
+
+        {stats.warnings.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {stats.warnings.map((w, i) => (
+              <li
+                key={i}
+                className={`text-[11px] leading-snug px-2 py-1.5 rounded border ${
+                  w.level === 'error'
+                    ? 'text-danger border-danger/40 bg-danger/10'
+                    : 'text-warn border-warn/40 bg-warn/10'
+                }`}
+              >
+                {w.message}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
-      
-      <div className="flex-1 px-6 space-y-5 pb-6 overflow-y-auto">
-        
-        {/* PANEL 1: Konfigurasi Dasar */}
-        <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-          <h3 className="text-sm font-bold text-blue-400 border-b border-blue-500/30 pb-2 cursor-pointer flex justify-between items-center" onClick={() => togglePanel(1)}>
-            <span>1. Konfigurasi Dasar</span>
-            <span>{openPanels[1] ? "▲" : "▼"}</span>
-          </h3>
-          {openPanels[1] && (
-            <div className="space-y-4 pt-2">
-              <div className="flex flex-col">
-                <label htmlFor="setupType" className="text-xs font-medium text-blue-400 mb-1">Tipe Setup Array</label>
-                <select id="setupType" name="setupType" value={settings.setupType} onChange={handleChange} className="bg-white/5 border border-blue-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500/50 transition-colors text-sm font-bold text-yellow-300">
-                  <optgroup label="ARRAY (Distribusi)">
-                    <option value="Curved Array">Curved (Arc Array)</option>
-                    <option value="Straight Delayed Array">Straight Delayed Array</option>
-                    <option value="L/R">L/R (Kiri/Kanan)</option>
-                  </optgroup>
-                  <optgroup label="CARDIOID (Tolak Panggung)">
-                    <option value="End-Fire">End-Fire (Maju)</option>
-                    <option value="End-Fire L/R">End-Fire L/R</option>
-                    <option value="Gradient In-Line">Gradient: In-Line (Mundur)</option>
-                    <option value="Gradient Inverted Stack">Gradient: Inverted Stack (Tumpuk)</option>
-                    <option value="Cardioid L/R">Cardioid L/R</option>
-                    <option value="Auto-Efficiency">Auto-Efficiency</option>
-                    <option value="Pattern Implosion">Pattern Implosion</option>
-                  </optgroup>
-                </select>
-              </div>
-              
-              {settings.setupType.includes('L/R') && (
-                <div className="flex flex-col">
-                  <label htmlFor="stageWidth" className="text-xs font-medium text-blue-400 mb-1">Lebar Panggung (m)</label>
-                  <input id="stageWidth" type="number" name="stageWidth" min="1" step="0.5" value={settings.stageWidth} onChange={handleChange} className="bg-white/5 border border-blue-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500/50 transition-colors" />
-                </div>
-              )}
 
-              <div className="flex flex-col">
-                <label htmlFor="count" className="text-xs font-medium text-blue-400 mb-1">{settings.setupType.includes('L/R') ? 'Total Jumlah Box (Kiri + Kanan)' : 'Total Jumlah Box (Titik Fisik)'}</label>
-                <input id="count" type="number" name="count" min={settings.setupType.includes('L/R') ? "2" : "1"} max="32" value={settings.count} onChange={handleChange} className="bg-white/5 border border-blue-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500/50 transition-colors text-sm font-bold text-yellow-300" />
-              </div>
-              
-              <div className="flex flex-col border-t border-gray-800 pt-3">
-                 <label htmlFor="targetFrequency" className="text-xs font-medium text-yellow-300 mb-1">Target Freq (Hz) - Auto 1/4 Lambda</label>
-                 <input id="targetFrequency" type="number" name="targetFrequency" min="20" max="200" placeholder="Contoh: 63" value={settings.targetFrequency} onChange={handleChange} className="bg-white/5 border border-blue-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500/50 transition-colors text-sm" />
-              </div>
+      <div className="flex-1 scroll-y px-3 py-3 space-y-2.5">
+        {/* 1 — Konfigurasi array */}
+        <Panel id={1} title="Konfigurasi array" isOpen={open[1]} onToggle={toggle}>
+          <div>
+            <label htmlFor="setupType" className="field-label">
+              Tipe setup
+            </label>
+            <select
+              id="setupType"
+              className="select input-key"
+              value={settings.setupType}
+              onChange={(e) => set('setupType', e.target.value)}
+            >
+              <optgroup label="Distribusi horizontal">
+                <option value="Straight Delayed Array">Arc Delay — lurus, busur via delay (default)</option>
+                <option value="Curved Array">Curved Array — box dibengkokkan fisik (jarang dipakai)</option>
+                <option value="L/R">L/R (kiri–kanan panggung)</option>
+              </optgroup>
+              <optgroup label="Directional / stage rejection">
+                <option value="End-Fire">End-Fire</option>
+                <option value="End-Fire L/R">End-Fire L/R</option>
+                <option value="Gradient In-Line">Gradient In-Line (2 baris)</option>
+                <option value="Gradient Inverted Stack">Gradient Inverted Stack (tumpuk)</option>
+                <option value="Cardioid L/R">Cardioid L/R</option>
+                <option value="Auto-Efficiency">Auto-Efficiency</option>
+                <option value="Pattern Implosion">Pattern Implosion</option>
+              </optgroup>
+            </select>
+          </div>
+
+          {isLR && (
+            <div>
+              <label htmlFor="stageWidth" className="field-label">
+                Lebar panggung (m) — jarak antar cluster
+              </label>
+              <input className="input" {...numberProps('stageWidth', { min: '0', step: '0.5' })} />
             </div>
           )}
-        </div>
 
-        {/* PANEL 2: Dimensi & Orientasi */}
-        <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-          <h3 className="text-sm font-bold text-indigo-400 border-b border-indigo-500/30 pb-2 cursor-pointer flex justify-between items-center" onClick={() => togglePanel(2)}>
-            <span>2. Dimensi Fisik Subwoofer</span>
-            <span>{openPanels[2] ? "▲" : "▼"}</span>
-          </h3>
-          {openPanels[2] && (
-            <div className="space-y-4 pt-2">
-              <div className="flex flex-col">
-                <label htmlFor="preset" className="text-xs font-medium text-indigo-400 mb-1">Preset Subwoofer</label>
-                <div className="flex space-x-2">
-                   <select id="preset" name="preset" value={settings.preset} onChange={handleChange} className="flex-1 bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-indigo-500/50 transition-colors text-xs w-full truncate">
-                     <option value="Custom">-- Custom Dimension --</option>
-                     {savedPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                   </select>
-                   {settings.preset !== 'Custom' ? (
-                      <button onClick={() => handleDeletePreset(settings.preset)} className="bg-red-900/50 hover:bg-red-900 border border-red-800 text-red-200 px-3 py-2 rounded text-xs transition-colors" title="Hapus Preset">X</button>
-                   ) : (
-                      <button onClick={handleSavePreset} className="bg-yellow-900/30 hover:bg-yellow-800 border border-indigo-500/30 text-white px-3 py-2 rounded text-xs transition-colors whitespace-nowrap" title="Simpan Dimensi Saat Ini">Save</button>
-                   )}
-                </div>
-              </div>
+          <div>
+            <label htmlFor="count" className="field-label">
+              {isLR ? 'Total titik (kiri + kanan)' : 'Jumlah titik horizontal'}
+            </label>
+            <input
+              className="input input-key"
+              {...numberProps('count', { min: isLR ? '2' : '1', max: '48', step: '1' })}
+            />
+          </div>
 
-              <div className="grid grid-cols-3 gap-2 mt-2">
-                <div className="flex flex-col">
-                  <label htmlFor="width" className="text-[10px] font-medium text-indigo-400 mb-1">Lebar (W) m</label>
-                  <input id="width" type="number" name="width" min="0.1" step="0.05" value={settings.width} onChange={handleChange} className="bg-white/5 border border-indigo-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-indigo-500/50 transition-colors text-xs" />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="height" className="text-[10px] font-medium text-indigo-400 mb-1">Tinggi (H) m</label>
-                  <input id="height" type="number" name="height" min="0.1" step="0.05" value={settings.height} onChange={handleChange} className="bg-white/5 border border-indigo-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-indigo-500/50 transition-colors text-xs" />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="depth" className="text-[10px] font-medium text-indigo-400 mb-1">Dalam (D) m</label>
-                  <input id="depth" type="number" name="depth" min="0.1" step="0.05" value={settings.depth} onChange={handleChange} className="bg-white/5 border border-indigo-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-indigo-500/50 transition-colors text-xs" />
-                </div>
-              </div>
-
-              <div className="flex flex-col">
-                <label htmlFor="orientation" className="text-xs font-medium text-indigo-400 mb-1">Orientasi Box</label>
-                <select id="orientation" name="orientation" value={settings.orientation} onChange={handleChange} className="bg-white/5 border border-indigo-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-indigo-500/50 transition-colors text-xs">
-                  <option value="Landscape">Landscape</option>
-                  <option value="Portrait">Portrait</option>
-                </select>
-              </div>
+          {showTheta && (
+            <div>
+              <label htmlFor="theta" className="field-label">
+                Sudut coverage busur θ (°)
+              </label>
+              <input className="input input-key" {...numberProps('theta', { min: '0', max: '180', step: '1' })} />
+              <p className="section-note mt-1">
+                {settings.setupType === 'Curved Array'
+                  ? 'Box digeser mundur secara fisik mengikuti busur — dipakai hanya bila layout panggung benar-benar memungkinkan box disusun melengkung.'
+                  : 'Praktik standar: box tetap lurus di depan panggung, busur coverage dibentuk lewat delay yang makin besar ke arah tepi.'}
+              </p>
             </div>
           )}
-        </div>
+        </Panel>
 
-        {/* PANEL 3: Susunan & Jarak */}
-        <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-          <h3 className="text-sm font-bold text-purple-400 border-b border-purple-500/30 pb-2 cursor-pointer flex justify-between items-center" onClick={() => togglePanel(3)}>
-            <span>3. Susunan Matrix & Jarak</span>
-            <span>{openPanels[3] ? "▲" : "▼"}</span>
-          </h3>
-          {openPanels[3] && (
-            <div className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col">
-                  <label htmlFor="stack" className="text-xs font-medium text-purple-400 mb-1">Stack (Tumpukan)</label>
-                  <input id="stack" type="number" name="stack" min="1" step="1" max="6" value={settings.stack} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300" />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="rows" className="text-xs font-medium text-purple-400 mb-1">Rows (Baris Belakang)</label>
-                  <input id="rows" type="number" name="rows" min="1" step="1" max={settings.setupType.includes('End-Fire') ? 10 : settings.setupType.includes('Gradient In-Line') ? 2 : 2} value={settings.rows} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm font-bold text-yellow-300" disabled={settings.setupType === 'Gradient Inverted Stack'} />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="rowSpacing" className="text-xs font-medium text-purple-400 mb-1">Jarak Baris (m)</label>
-                  <input id="rowSpacing" type="number" name="rowSpacing" min="0" step="0.05" value={settings.rowSpacing} onChange={handleChange} placeholder={((settings.orientation === 'Landscape' ? Number(settings.depth) : Number(settings.width)) + Number(settings.gap)).toFixed(2)} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
-                  {renderLambdaHelper('rowSpacing', settings.rowSpacing, 'text-purple-300/60')}
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="gap" className="text-xs font-medium text-purple-400 mb-1">Sub Gap (m)</label>
-                  <input id="gap" type="number" name="gap" min="0" step="0.05" value={settings.gap} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm" />
-                  {renderLambdaHelper('gap', settings.gap, 'text-purple-300/60')}
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="centralGap" className="text-xs font-medium text-purple-400 mb-1">Central Gap (m)</label>
-                  <input id="centralGap" type="number" name="centralGap" min="0" step="0.05" value={settings.centralGap} onChange={handleChange} disabled={Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')} className={`bg-white/5 border border-purple-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors text-sm ${(Number(settings.count) % 2 !== 0 || settings.setupType.includes('L/R')) ? 'opacity-50 cursor-not-allowed' : ''}`} />
-                  {renderLambdaHelper('centralGap', settings.centralGap, 'text-purple-300/60')}
-                </div>
-              </div>
-              
-              {(settings.setupType === 'Curved Array' || settings.setupType === 'Straight Delayed Array' || settings.setupType === 'Auto-Efficiency' || settings.setupType === 'Pattern Implosion') && (
-                <div className="flex flex-col pt-3 border-t border-purple-500/30">
-                  <label htmlFor="theta" className="text-xs font-medium text-yellow-300 mb-1">Sudut Cakupan (Theta) °</label>
-                  <input id="theta" type="number" name="theta" min="0" max="180" value={settings.theta} onChange={handleChange} className="bg-white/5 border border-purple-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-purple-500/50 transition-colors font-bold" />
-                </div>
+        {/* 2 — Box */}
+        <Panel id={2} title="Dimensi box" isOpen={open[2]} onToggle={toggle}>
+          <div>
+            <label htmlFor="preset" className="field-label">
+              Preset
+            </label>
+            <div className="flex gap-1.5">
+              <select
+                id="preset"
+                className="select flex-1"
+                value={settings.preset}
+                onChange={(e) => handlePresetSelect(e.target.value)}
+              >
+                <option value="Custom">Dimensi manual</option>
+                {savedPresets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {settings.preset !== 'Custom' ? (
+                <button className="btn btn-danger px-2.5" onClick={() => handleDeletePreset(settings.preset)} title="Hapus preset">
+                  Hapus
+                </button>
+              ) : (
+                <button className="btn px-2.5" onClick={handleSavePreset} title="Simpan dimensi saat ini">
+                  Simpan
+                </button>
               )}
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* PANEL 4: Tuning Cardioid / Gradient */}
-        {(!settings.setupType.includes('End-Fire') && !settings.setupType.includes('L/R') && (settings.setupType.includes('Gradient') || Number(settings.stack) > 1 || settings.setupType.includes('Array'))) && (
-          <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-            <h3 className="text-sm font-bold text-fuchsia-400 border-b border-fuchsia-500/30 pb-2 cursor-pointer flex justify-between items-center" onClick={() => togglePanel(4)}>
-              <span>4. Tuning Cardioid / Gradient</span>
-              <span>{openPanels[4] ? "▲" : "▼"}</span>
-            </h3>
-            {openPanels[4] && (
-              <div className="space-y-4 pt-2">
-                <div className="flex items-center">
-                  <input type="checkbox" id="cardioid" name="cardioid" checked={settings.cardioid} onChange={handleChange} disabled={settings.setupType.includes('Gradient')} className="w-4 h-4 rounded border-gray-300 text-fuchsia-400 focus:ring-fuchsia-500 bg-black/20 disabled:opacity-50" />
-                  <label htmlFor="cardioid" className="ml-2 text-xs font-bold text-fuchsia-400">Aktifkan Gradient Cardioid</label>
-                </div>
-                
-                {(settings.cardioid || settings.setupType.includes('Gradient')) && (
-                  <div className="flex flex-col bg-white/5 p-3 rounded-lg border border-fuchsia-500/20">
-                    {!settings.setupType.includes('Gradient In-Line') && (
-                      <>
-                        <label className="text-[10px] font-medium text-fuchsia-400 mb-2">Pilih Box Menghadap Belakang (Reversed)</label>
-                        <div className="flex flex-wrap gap-3 mb-3">
-                          {Array.from({ length: Number(settings.stack) }).map((_, i) => (
-                             <label key={i} className="flex flex-col items-center cursor-pointer">
-                                <span className="text-[10px] text-fuchsia-400 font-bold mb-1">Box {i + 1}</span>
-                                <input 
-                                  type="checkbox"
-                                  checked={settings.cardioidReversedBoxes[i] || false}
-                                  onChange={(e) => {
-                                     const newRev = [...settings.cardioidReversedBoxes];
-                                     newRev[i] = e.target.checked;
-                                     onChange({ ...settings, cardioidReversedBoxes: newRev });
-                                  }}
-                                  className="w-4 h-4 text-fuchsia-500 bg-white/5 border-gray-500 rounded focus:ring-fuchsia-400"
-                                />
-                             </label>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                    <div className="flex flex-col gap-3">
-                      <div className="flex flex-col">
-                        <label htmlFor="cardioidDelay" className="text-[10px] font-medium text-yellow-300 mb-1">Rear Additional Delay (ms)</label>
-                        <input id="cardioidDelay" type="number" name="cardioidDelay" min="0" step="0.1" value={settings.cardioidDelay} onChange={handleChange} className="bg-white/5 border border-fuchsia-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-fuchsia-500/50 transition-colors text-sm w-full font-bold" />
-                        {renderLambdaHelper('cardioidDelay', settings.cardioidDelay, 'text-fuchsia-300/60', true)}
-                      </div>
-                      <label className="flex items-center space-x-2 cursor-pointer bg-fuchsia-900/40 px-2 py-2 rounded border border-fuchsia-500/30">
-                        <input type="checkbox" checked={settings.invertRearPolarity} onChange={(e) => onChange({ ...settings, invertRearPolarity: e.target.checked })} className="w-3 h-3 text-fuchsia-500 bg-black/20 border-fuchsia-500/50 rounded focus:ring-fuchsia-400" />
-                        <span className="text-[10px] font-bold text-fuchsia-300">Invert Rear Phase (180°)</span>
-                      </label>
-                      <div className="flex flex-col border border-fuchsia-500/20 rounded p-2 bg-black/30 space-y-2 mt-2">
-                         <label className="flex items-center space-x-2 cursor-pointer">
-                           <input type="checkbox" name="cardioidSpacers" checked={settings.cardioidSpacers} onChange={handleChange} className="w-3 h-3 text-fuchsia-500 bg-black/20 border-fuchsia-500/50 rounded focus:ring-fuchsia-400" />
-                           <span className="text-[10px] font-bold text-fuchsia-300" title="Mind the Gap: Celah udara menstabilkan baffle">Sisipkan Celah Udara (Spacers)</span>
-                         </label>
-                         {settings.cardioidSpacers && (
-                            <div className="flex items-center justify-between ml-5">
-                              <label htmlFor="cardioidSpacerSize" className="text-[9px] text-fuchsia-400/80">Tebal Celah (m):</label>
-                              <input id="cardioidSpacerSize" type="number" name="cardioidSpacerSize" min="0" step="0.01" value={settings.cardioidSpacerSize} onChange={handleChange} className="w-16 bg-white/5 border border-fuchsia-500/30 rounded px-1.5 py-1 text-white focus:outline-none focus:border-fuchsia-500/50 text-[10px]" />
-                            </div>
-                         )}
-                      </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label htmlFor="width" className="field-label">
+                Lebar
+              </label>
+              <input className="input px-2" {...numberProps('width', { min: '0', step: '0.01' })} />
+            </div>
+            <div>
+              <label htmlFor="height" className="field-label">
+                Tinggi
+              </label>
+              <input className="input px-2" {...numberProps('height', { min: '0', step: '0.01' })} />
+            </div>
+            <div>
+              <label htmlFor="depth" className="field-label">
+                Dalam
+              </label>
+              <input className="input px-2" {...numberProps('depth', { min: '0', step: '0.01' })} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="orientation" className="field-label">
+                Orientasi
+              </label>
+              <select
+                id="orientation"
+                className="select"
+                value={settings.orientation}
+                onChange={(e) => set('orientation', e.target.value)}
+              >
+                <option value="Landscape">Landscape</option>
+                <option value="Portrait">Portrait</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="boxSensitivity" className="field-label" title="Max SPL satu box pada jarak 1 m">
+                Max SPL @1 m (dB)
+              </label>
+              <input className="input" {...numberProps('boxSensitivity', { min: '0', step: '1', placeholder: '135' })} />
+            </div>
+          </div>
+          <p className="section-note">
+            Muka box menghadap sumbu <strong>+X</strong> ({dimX(settings).toFixed(2)} m) dengan kedalaman{' '}
+            {dimY(settings).toFixed(2)} m.
+          </p>
+        </Panel>
+
+        {/* 3 — Susunan & jarak */}
+        <Panel id={3} title="Susunan & jarak" isOpen={open[3]} onToggle={toggle}>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="stack" className="field-label">
+                Stack (ke atas)
+              </label>
+              <input className="input input-key" {...numberProps('stack', { min: '1', max: '8', step: '1' })} />
+            </div>
+            <div>
+              <label htmlFor="rows" className="field-label">
+                Baris (ke belakang)
+              </label>
+              <input
+                className="input input-key"
+                {...numberProps('rows', { min: '1', max: String(maxRowsFor(settings.setupType)), step: '1' })}
+                disabled={settings.setupType === 'Gradient Inverted Stack'}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="gap" className="field-label">
+                Sub gap (m)
+              </label>
+              <input className="input" {...numberProps('gap', { min: '0', step: '0.01' })} />
+              <LambdaSelect {...lambdaProps('gap')} />
+            </div>
+            <div>
+              <label
+                htmlFor="centralGap"
+                className="field-label"
+                title="Jarak pusat-ke-pusat pasangan box paling tengah = Sub Gap + lebar box — hanya berlaku untuk array genap"
+              >
+                Central gap (m)
+              </label>
+              <input
+                className="input"
+                {...numberProps('centralGap', { min: '0', step: '0.01' })}
+                disabled={n(settings.count) % 2 !== 0 || isLR}
+              />
+              <LambdaSelect {...lambdaProps('centralGap')} />
+            </div>
+          </div>
+          <p className="section-note">
+            Sub Gap dan Central Gap saling mengikuti — nilainya pasti berbeda karena Central Gap sudah
+            memperhitungkan lebar box (jarak pusat-ke-pusat), sementara Sub Gap hanya celah kosong antar box.
+          </p>
+
+          {(rowsCount > 1 || isEndFire) && (
+            <div>
+              <label htmlFor="rowSpacing" className="field-label">
+                Jarak antar baris (m) — pusat ke pusat
+              </label>
+              <input
+                className="input"
+                {...numberProps('rowSpacing', {
+                  min: '0',
+                  step: '0.01',
+                  placeholder: (dimY(settings) + n(settings.gap)).toFixed(2),
+                })}
+              />
+              <LambdaSelect {...lambdaProps('rowSpacing')} />
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-line">
+            <label htmlFor="targetFrequency" className="field-label">
+              Frekuensi target (Hz) — kunci jarak ke ¼ λ
+            </label>
+            <input className="input" {...numberProps('targetFrequency', { min: '20', max: '200', step: '1', placeholder: '63' })} />
+            <p className="section-note mt-1">
+              Jarak ¼ λ menjaga array tetap koheren sampai ±{(aliasingFromTarget || 0).toFixed(0)} Hz. Mengubah sub
+              gap secara manual akan melepas kunci ini.
+            </p>
+          </div>
+        </Panel>
+
+        {/* 4 — Cardioid / gradient */}
+        {showCardioidPanel && (
+          <Panel id={4} title="Cardioid / gradient" isOpen={open[4]} onToggle={toggle}>
+            {!isGradientSetup && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="checkbox"
+                  checked={settings.cardioid}
+                  onChange={(e) => set('cardioid', e.target.checked)}
+                />
+                <span className="text-xs font-semibold">Aktifkan pola cardioid</span>
+              </label>
+            )}
+
+            {(settings.cardioid || isGradientSetup) && (
+              <>
+                {usesStackReversal && (
+                  <div>
+                    <span className="field-label">Box yang diputar menghadap belakang</span>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from({ length: stackCount }).map((_, i) => (
+                        <label
+                          key={i}
+                          className={`flex items-center gap-1.5 px-2 py-1.5 rounded border cursor-pointer text-[11px] ${
+                            settings.cardioidReversedBoxes[i]
+                              ? 'border-warn/60 bg-warn/10 text-warn'
+                              : 'border-line bg-raised text-ink-2'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="checkbox"
+                            checked={settings.cardioidReversedBoxes[i] ?? false}
+                            onChange={(e) => {
+                              const next = [...settings.cardioidReversedBoxes];
+                              next[i] = e.target.checked;
+                              onChange({ ...settings, cardioidReversedBoxes: next });
+                            }}
+                          />
+                          Box {i + 1}
+                        </label>
+                      ))}
                     </div>
+                    <p className="section-note mt-1">Urutan dari bawah ke atas tumpukan.</p>
                   </div>
                 )}
-              </div>
+
+                {!usesStackReversal && (
+                  <p className="section-note">
+                    Baris belakang (baris 2 ke atas) otomatis berperan sebagai sumber rear.
+                  </p>
+                )}
+
+                <div>
+                  <label htmlFor="cardioidDelay" className="field-label">
+                    Delay tambahan sumber rear (ms)
+                  </label>
+                  <input className="input input-key" {...numberProps('cardioidDelay', { min: '0', step: '0.05' })} />
+                  <LambdaSelect {...lambdaProps('cardioidDelay', true)} />
+                  {recommendedDelay > 0 && (
+                    <button
+                      className="btn w-full mt-1.5 min-h-0 py-1 text-[11px]"
+                      onClick={() => set('cardioidDelay', Number(recommendedDelay.toFixed(2)))}
+                      title="Waktu tempuh suara sepanjang jarak antar elemen — syarat pembatalan ke belakang"
+                    >
+                      Pakai nilai fisik: {recommendedDelay.toFixed(2)} ms
+                    </button>
+                  )}
+                  <p className="section-note mt-1">
+                    Cardioid membatalkan energi ke belakang bila delay = jarak antar elemen ÷ kecepatan suara,
+                    dan polaritas rear dibalik.
+                  </p>
+                </div>
+
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={settings.invertRearPolarity}
+                    onChange={(e) => set('invertRearPolarity', e.target.checked)}
+                  />
+                  <span className="text-xs font-semibold">Balik polaritas rear (180°)</span>
+                </label>
+                {!settings.invertRearPolarity && (
+                  <p className="text-[11px] text-warn leading-snug">
+                    Tanpa pembalikan polaritas, susunan ini tidak menghasilkan cardioid.
+                  </p>
+                )}
+
+                {usesStackReversal && (
+                  <div className="pt-2 border-t border-line space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="checkbox"
+                        checked={settings.cardioidSpacers}
+                        onChange={(e) => set('cardioidSpacers', e.target.checked)}
+                      />
+                      <span className="text-xs font-semibold" title="Celah udara antar box bertumpuk">
+                        Sisipkan celah udara antar tumpukan
+                      </span>
+                    </label>
+                    {settings.cardioidSpacers && (
+                      <div>
+                        <label htmlFor="cardioidSpacerSize" className="field-label">
+                          Tebal celah (m)
+                        </label>
+                        <input className="input" {...numberProps('cardioidSpacerSize', { min: '0', step: '0.01' })} />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
-          </div>
+          </Panel>
         )}
 
-        {/* PANEL 5: Heatmap & Lingkungan */}
-        <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
-          <div className="flex justify-between items-center border-b border-rose-500/30 pb-2">
-             <h3 className="text-sm font-bold text-rose-400 flex-1 cursor-pointer" onClick={() => togglePanel(5)}>
-               5. Analisis Heatmap & Udara {openPanels[5] ? "▲" : "▼"}
-             </h3>
+        {/* 5 — Heatmap & lingkungan */}
+        <Panel id={5} title="Heatmap & lingkungan" isOpen={open[5]} onToggle={toggle}>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="checkbox"
+              checked={settings.showHeatmap}
+              onChange={(e) => set('showHeatmap', e.target.checked)}
+            />
+            <span className="text-xs font-semibold">Tampilkan peta SPL</span>
+          </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="frequency" className="field-label">
+                Frekuensi pusat (Hz)
+              </label>
+              <input
+                className="input"
+                {...numberProps('frequency', { min: '16', max: '250', step: '1' })}
+                disabled={!settings.showHeatmap}
+              />
+            </div>
+            <div>
+              <label htmlFor="bandwidth" className="field-label">
+                Lebar pita
+              </label>
+              <select
+                id="bandwidth"
+                className="select"
+                value={settings.bandwidth}
+                onChange={(e) => set('bandwidth', e.target.value)}
+                disabled={!settings.showHeatmap}
+              >
+                <option value="Single">Nada tunggal</option>
+                <option value="1/3 Octave">1/3 oktaf</option>
+                <option value="1 Octave">1 oktaf</option>
+                <option value="Broadband">Broadband 25–125 Hz</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="resolution" className="field-label">
+                Resolusi render
+              </label>
+              <select
+                id="resolution"
+                className="select"
+                value={settings.resolution}
+                onChange={(e) => set('resolution', e.target.value)}
+                disabled={!settings.showHeatmap}
+              >
+                <option value="Low">Rendah (cepat)</option>
+                <option value="Medium">Sedang</option>
+                <option value="High">Tinggi</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="earHeight" className="field-label">
+                Tinggi bidang ukur (m)
+              </label>
+              <input
+                className="input"
+                {...numberProps('earHeight', { min: '0', step: '0.1', placeholder: '1.6' })}
+                disabled={!settings.showHeatmap}
+              />
+            </div>
+            <div>
+              <label htmlFor="heatmapBandStep" className="field-label" title="Bulatkan level agar kontur coverage terbaca">
+                Kontur bertingkat
+              </label>
+              <select
+                id="heatmapBandStep"
+                className="select"
+                value={String(Number(settings.heatmapBandStep) || 0)}
+                onChange={(e) => set('heatmapBandStep', Number(e.target.value))}
+                disabled={!settings.showHeatmap}
+              >
+                <option value="0">Gradasi halus</option>
+                <option value="3">Setiap 3 dB</option>
+                <option value="6">Setiap 6 dB</option>
+              </select>
+            </div>
           </div>
-          {openPanels[5] && (
-            <div className="space-y-4 pt-2">
-              <div className="flex items-center bg-rose-900/40 px-3 py-2 rounded-lg border border-rose-500/30 mb-2">
-                <input type="checkbox" id="showHeatmap" name="showHeatmap" checked={settings.showHeatmap} onChange={handleChange} className="w-4 h-4 rounded border-gray-300 text-rose-400 focus:ring-rose-500 bg-black/20" />
-                <label htmlFor="showHeatmap" className="ml-2 text-xs font-bold text-rose-400 flex-1 cursor-pointer">Tampilkan SPL Heatmap</label>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col">
-                  <label htmlFor="frequency" className="text-[10px] font-medium text-rose-400 mb-1">Frekuensi Pusat (Hz)</label>
-                  <input id="frequency" type="number" name="frequency" min="20" max="200" value={settings.frequency} onChange={handleChange} disabled={!settings.showHeatmap} className="bg-white/5 border border-rose-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-rose-500/50 transition-colors text-xs font-bold disabled:opacity-50" />
-                </div>
-                <div className="flex flex-col">
-                  <label htmlFor="bandwidth" className="text-[10px] font-medium text-rose-400 mb-1">Bandwidth</label>
-                  <select id="bandwidth" name="bandwidth" value={settings.bandwidth} onChange={handleChange} disabled={!settings.showHeatmap} className="bg-white/5 border border-rose-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-rose-500/50 transition-colors text-[11px] disabled:opacity-50">
-                    <option value="Single">Single Tone</option>
-                    <option value="1/3 Octave">1/3 Octave</option>
-                    <option value="1 Octave">1 Octave</option>
-                    <option value="Broadband">Broadband</option>
-                  </select>
-                </div>
-                <div className="flex flex-col col-span-2">
-                  <label htmlFor="resolution" className="text-[10px] font-medium text-rose-400 mb-1">Kualitas Render Peta</label>
-                  <select id="resolution" name="resolution" value={settings.resolution} onChange={handleChange} disabled={!settings.showHeatmap} className="bg-white/5 border border-rose-500/30 rounded px-3 py-1.5 text-white focus:outline-none focus:border-rose-500/50 transition-colors text-xs disabled:opacity-50">
-                    <option value="Low">Low (Cepat)</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High (Detail/HD)</option>
-                  </select>
-                </div>
-              </div>
-              
-              <div className="border-t border-rose-500/30 pt-3 mt-2 space-y-3">
-                 <h4 className="text-[11px] font-bold text-yellow-300">Kondisi Udara (Mempengaruhi Suara)</h4>
-                 <div className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col">
-                      <label htmlFor="temperature" className="text-[10px] font-medium text-rose-400 mb-1">Suhu (°C)</label>
-                      <input id="temperature" type="number" name="temperature" placeholder="20" value={settings.temperature} onChange={handleChange} className="bg-white/5 border border-rose-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-rose-500/50 transition-colors text-xs" />
-                    </div>
-                    <div className="flex flex-col">
-                      <label htmlFor="humidity" className="text-[10px] font-medium text-rose-400 mb-1">Kelembapan (%)</label>
-                      <input id="humidity" type="number" name="humidity" placeholder="50" min="0" max="100" value={settings.humidity} onChange={handleChange} className="bg-white/5 border border-rose-500/30 rounded px-2 py-1.5 text-white focus:outline-none focus:border-rose-500/50 transition-colors text-xs" />
-                    </div>
-                 </div>
-                 <div className="flex flex-col">
-                   <label htmlFor="speedOfSound" className="text-[10px] font-medium text-rose-400 mb-1">Kecepatan Suara (m/s)</label>
-                   <input id="speedOfSound" type="number" name="speedOfSound" placeholder="343" step="0.1" value={settings.speedOfSound} onChange={handleChange} className="bg-black/30 border border-rose-500/30 rounded px-3 py-2 text-rose-400 focus:outline-none focus:border-rose-500/50 transition-colors text-sm font-bold shadow-inner" />
-                 </div>
-              </div>
-              
-              <div className="border-t border-rose-500/30 pt-3 mt-2 space-y-3">
-                <h4 className="text-[11px] font-bold text-yellow-300">Array Shading Strategy (Line Array)</h4>
-                <p className="text-[9px] text-rose-300/80 leading-snug">Rekomendasi kompensasi HF berdasarkan redaman udara (Jarak 50m @ 10kHz).</p>
-                <div className="flex justify-between items-center text-[10px]">
-                  <span className="text-rose-400">HF Shelf (Bottom Zone):</span>
-                  <span className="font-bold text-white">0 dB (Full Range)</span>
-                </div>
-                <div className="flex justify-between items-center text-[10px]">
-                  <span className="text-rose-400">HF Shelf (Top Zone):</span>
-                  <span className="font-bold text-rose-500">
-                    +{ (calculateAirAbsorption(10000, Number(settings.temperature)||20, Number(settings.humidity)||50) * 50).toFixed(1) } dB
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          <p className="section-note">
+            Kontur bertingkat membulatkan level ke kelipatan dB sehingga batas coverage −6 dB dan −12 dB
+            terbaca sebagai garis, bukan gradasi.
+          </p>
 
-        {/* PANEL 6: Data Export PDF */}
-        <div className="bg-gradient-to-br from-zinc-900/80 to-black p-4 rounded-xl border border-white/10 space-y-3 shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl mb-4">
-          <h3 className="text-sm font-bold text-emerald-400 border-b border-emerald-500/30 pb-2 cursor-pointer flex justify-between items-center" onClick={() => togglePanel(6)}>
-            <span>6. Data Info Proyek</span>
-            <span>{openPanels[6] ? "▲" : "▼"}</span>
-          </h3>
-          {openPanels[6] && (
-            <div className="space-y-4 pt-2">
-              <div className="flex flex-col">
-                <input type="text" title="Nama Project / Acara" placeholder="Nama Project / Acara" value={reportInfo.project} onChange={(e) => onReportInfoChange({...reportInfo, project: e.target.value})} className="bg-white/5 border border-emerald-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-emerald-500/50 transition-colors text-xs" />
-              </div>
-              <div className="flex flex-col">
-                <input type="text" title="Venue / Lokasi" placeholder="Venue / Lokasi" value={reportInfo.venue} onChange={(e) => onReportInfoChange({...reportInfo, venue: e.target.value})} className="bg-white/5 border border-emerald-500/30 rounded px-3 py-2 text-white focus:outline-none focus:border-emerald-500/50 transition-colors text-xs" />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <input type="text" title="System Engineer" placeholder="System Engineer" value={reportInfo.engineer} onChange={(e) => onReportInfoChange({...reportInfo, engineer: e.target.value})} className="bg-white/5 border border-emerald-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-emerald-500/50 transition-colors text-xs" />
-                <input type="date" title="Tanggal Acara" value={reportInfo.date} onChange={(e) => onReportInfoChange({...reportInfo, date: e.target.value})} className="bg-white/5 border border-emerald-500/30 rounded px-2 py-2 text-white focus:outline-none focus:border-emerald-500/50 transition-colors text-[10px]" />
-              </div>
+          <div className="pt-2 border-t border-line">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="field-label mb-0">Kondisi udara</span>
+              <button
+                className="btn min-h-0 py-1 px-2 text-[11px]"
+                onClick={loadWeather}
+                disabled={weather.status === 'loading'}
+                title="Ambil suhu & kelembapan terkini dari lokasi perangkat"
+              >
+                {weather.status === 'loading' ? 'Mengambil…' : 'Ambil dari cuaca'}
+              </button>
             </div>
-          )}
-        </div>
+            {weather.status === 'error' && (
+              <p className="text-[11px] text-warn leading-snug mb-2">
+                {weather.message} Isi manual saja.
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="temperature" className="field-label">
+                Suhu (°C)
+              </label>
+              <input className="input" {...numberProps('temperature', { step: '0.5', placeholder: '20' })} />
+            </div>
+            <div>
+              <label htmlFor="humidity" className="field-label">
+                Kelembapan (%)
+              </label>
+              <input className="input" {...numberProps('humidity', { min: '0', max: '100', step: '1', placeholder: '50' })} />
+            </div>
+            <div className="col-span-2">
+              <label htmlFor="speedOfSound" className="field-label">
+                Kecepatan suara (m/s)
+              </label>
+              <input className="input input-key" {...numberProps('speedOfSound', { step: '0.1', placeholder: '343' })} />
+              <p className="section-note mt-1">
+                Terisi otomatis dari suhu &amp; kelembapan; bisa ditimpa manual. 1 ms ≈ {(c / 1000).toFixed(3)} m.
+              </p>
+            </div>
+          </div>
 
+          <div className="pt-2 border-t border-line">
+            <span className="field-label">Kompensasi serapan udara (ISO 9613-1)</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                inputMode="decimal"
+                className="input"
+                value={throwDistance}
+                min={1}
+                step={5}
+                onChange={(e) => setThrowDistance(Number(e.target.value) || 0)}
+                aria-label="Jarak lempar terjauh"
+              />
+              <span className="text-[11px] text-ink-2 whitespace-nowrap">m jarak</span>
+            </div>
+            <dl className="mt-2 space-y-1">
+              <div className="stat-row">
+                <dt>Rugi @ 10 kHz</dt>
+                <dd>{(airLoss * throwDistance).toFixed(1)} dB</dd>
+              </div>
+              <div className="stat-row">
+                <dt>Rugi @ 2 kHz</dt>
+                <dd>
+                  {(
+                    calculateAirAbsorption(2000, n(settings.temperature, DEFAULT_TEMPERATURE_C) || DEFAULT_TEMPERATURE_C, n(settings.humidity, 50) || 50) *
+                    throwDistance
+                  ).toFixed(1)}{' '}
+                  dB
+                </dd>
+              </div>
+              <div className="stat-row">
+                <dt>Rugi @ {settings.frequency || 63} Hz</dt>
+                <dd>
+                  {(
+                    calculateAirAbsorption(n(settings.frequency, 63) || 63, n(settings.temperature, DEFAULT_TEMPERATURE_C) || DEFAULT_TEMPERATURE_C, n(settings.humidity, 50) || 50) *
+                    throwDistance
+                  ).toFixed(2)}{' '}
+                  dB
+                </dd>
+              </div>
+            </dl>
+            <p className="section-note mt-1">
+              Angka ini adalah rugi tambahan di luar hukum kuadrat jarak — dipakai sebagai acuan HF shelf untuk zona
+              lempar terjauh. Pada pita subwoofer pengaruhnya dapat diabaikan.
+            </p>
+          </div>
+        </Panel>
+
+        {/* 6 — Info proyek */}
+        <Panel id={6} title="Info proyek" isOpen={open[6]} onToggle={toggle}>
+          <div>
+            <label htmlFor="rProject" className="field-label">
+              Nama project / acara
+            </label>
+            <input
+              id="rProject"
+              type="text"
+              className="input"
+              value={reportInfo.project}
+              onChange={(e) => onReportInfoChange({ ...reportInfo, project: e.target.value })}
+            />
+          </div>
+          <div>
+            <label htmlFor="rVenue" className="field-label">
+              Venue
+            </label>
+            <input
+              id="rVenue"
+              type="text"
+              className="input"
+              value={reportInfo.venue}
+              onChange={(e) => onReportInfoChange({ ...reportInfo, venue: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="rEngineer" className="field-label">
+                System engineer
+              </label>
+              <input
+                id="rEngineer"
+                type="text"
+                className="input"
+                value={reportInfo.engineer}
+                onChange={(e) => onReportInfoChange({ ...reportInfo, engineer: e.target.value })}
+              />
+            </div>
+            <div>
+              <label htmlFor="rDate" className="field-label">
+                Tanggal
+              </label>
+              <input
+                id="rDate"
+                type="date"
+                className="input"
+                value={reportInfo.date}
+                onChange={(e) => onReportInfoChange({ ...reportInfo, date: e.target.value })}
+              />
+            </div>
+          </div>
+        </Panel>
+
+        {/* 7 — Analisis coverage */}
+        <Panel id={7} title="Analisis coverage" isOpen={open[7]} onToggle={toggle}>
+          {areas.length === 0 ? (
+            <p className="section-note">
+              Belum ada area venue. Tambahkan area (mis. "Audience" dan "Stage") lewat panel Area Venue di peta.
+            </p>
+          ) : !coverage || coverage.areas.length === 0 ? (
+            <p className="section-note">Isi jumlah box dan dimensi dulu untuk menghitung spread.</p>
+          ) : (
+            <>
+              {coverage.frontToBack !== null && (
+                <div className="panel bg-raised p-2.5">
+                  <div className="stat-row">
+                    <dt>Front-back rejection</dt>
+                    <dd
+                      className={
+                        coverage.frontToBack >= 10 ? 'text-good' : coverage.frontToBack >= 5 ? 'text-warn' : 'text-danger'
+                      }
+                    >
+                      {coverage.frontToBack >= 0 ? '+' : ''}
+                      {coverage.frontToBack.toFixed(1)} dB
+                    </dd>
+                  </div>
+                  <p className="section-note mt-1">
+                    Rata-rata {coverage.audienceName} dikurangi {coverage.stageName}. Di atas 10 dB tergolong
+                    rejection cardioid yang efektif.
+                  </p>
+                </div>
+              )}
+
+              {coverage.areas.map((a) => (
+                <div key={a.areaId} className="panel bg-raised p-2.5">
+                  <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                    <span className="text-xs font-semibold truncate">{a.areaName}</span>
+                    <span className="text-[10px] text-ink-3 tnum flex-none">
+                      {a.samples} titik{a.excluded > 0 ? ` (${a.excluded} dekat sumber diabaikan)` : ''}
+                    </span>
+                  </div>
+                  <dl className="space-y-1">
+                    <div className="stat-row">
+                      <dt title="Selisih titik terkeras dan terpelan — makin kecil makin rata">Deviation</dt>
+                      <dd className={a.spread <= 6 ? 'text-good' : a.spread <= 12 ? 'text-warn' : 'text-danger'}>
+                        {a.spread.toFixed(1)} dB
+                      </dd>
+                    </div>
+                    <div className="stat-row">
+                      <dt>Deviasi baku</dt>
+                      <dd>{a.stdDev.toFixed(1)} dB</dd>
+                    </div>
+                    <div className="stat-row">
+                      <dt>Rentang (min → maks)</dt>
+                      <dd>
+                        {a.min.toFixed(1)} → {a.max.toFixed(1)} dB
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+
+              <p className="section-note">
+                Dihitung pada {settings.frequency} Hz ({settings.bandwidth}) di ketinggian {settings.earHeight || 1.6} m,
+                relatif terhadap satu box pada jarak 1 m. Ubah frekuensi di panel Heatmap untuk memeriksa pita lain.
+              </p>
+            </>
+          )}
+        </Panel>
+
+        <button className="btn btn-danger w-full" onClick={handleReset}>
+          Reset semua parameter
+        </button>
       </div>
     </div>
   );

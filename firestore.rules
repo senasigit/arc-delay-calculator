@@ -1,8 +1,60 @@
 rules_version = '2';
+
+// PERINGATAN KEAMANAN
+// -------------------
+// Aturan lama adalah `allow read, write: if true` untuk SELURUH database:
+// siapa pun yang menemukan konfigurasi Firebase di bundle JS bisa membaca,
+// mengubah, dan MENGHAPUS semua project serta preset milik Anda, atau memakai
+// database ini sebagai penyimpanan gratis. Aturan di bawah masih mengizinkan
+// akses tanpa login (aplikasi belum punya autentikasi), tetapi membatasi
+// kerusakan: hanya dua koleksi yang boleh disentuh, dengan batas bentuk data.
+//
+// Langkah berikutnya yang disarankan: aktifkan Firebase Anonymous Auth atau
+// Google Sign-In, lalu ubah isOpen() menjadi `request.auth != null` dan
+// tambahkan field ownerId pada tiap dokumen — contohnya ada di bagian bawah.
+//
+// Aturan ini baru berlaku setelah dijalankan:
+//   firebase deploy --only firestore:rules
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function isOpen() {
+      return true; // ganti menjadi: request.auth != null
+    }
+
+    function sane() {
+      return request.resource.data.keys().hasAll(['name'])
+             && request.resource.data.name is string
+             && request.resource.data.name.size() > 0
+             && request.resource.data.name.size() <= 120;
+    }
+
+    match /projects/{projectId} {
+      allow read: if isOpen();
+      allow create, update: if isOpen() && sane();
+      allow delete: if isOpen();
+    }
+
+    match /presets/{presetId} {
+      allow read: if isOpen();
+      allow create, update: if isOpen() && sane();
+      allow delete: if isOpen();
+    }
+
+    // Semua path lain ditolak.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Versi dengan autentikasi (aktifkan setelah login tersedia di aplikasi):
+//
+//   match /projects/{projectId} {
+//     allow read:           if request.auth != null && resource.data.ownerId == request.auth.uid;
+//     allow create:         if request.auth != null && request.resource.data.ownerId == request.auth.uid;
+//     allow update, delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+//   }
+// ---------------------------------------------------------------------------

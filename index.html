@@ -1,10 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
   <head>
     <meta charset="UTF-8" />
+    <!-- viewport-fit=cover diperlukan agar env(safe-area-inset-*) aktif di iPhone berponi -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Mewarnai bilah browser di iOS Safari & Chrome Android. Firefox/Opera
+         mengabaikannya tanpa efek samping, jadi aman dibiarkan. -->
+    <meta name="theme-color" content="#0e0f11" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Kalkulator array & delay subwoofer: arc delay, cardioid, end-fire, dan peta SPL." />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sub Forge</title>
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sub Forge" />
+    <title>Sub Forge — Subwoofer Array Calculator</title>
   </head>
   <body>
     <div id="root"></div>

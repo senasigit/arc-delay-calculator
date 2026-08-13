@@ -1,35 +1,425 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Sub Forge — design tokens
+   Satu permukaan netral + satu warna aksen + warna semantik.
+   Tidak ada gradient teks, tidak ada glow neon: kontras dan hierarki saja.
+
+   CATATAN PENAMAAN: jangan pernah menamai token warna dengan kata yang sudah
+   dipakai utility Tailwind lain — `--color-base` dahulu membuat `text-base`
+   berubah dari ukuran font menjadi warna, sehingga judul kartu jadi gelap di
+   atas panel gelap. Kata terlarang: base, sm, lg, xl, xs, left, right, center.
+   ========================================================================== */
 @theme {
-  --color-dark-bg: #0f1115;
-  --color-dark-panel: #1a1d24;
-  --color-dark-border: #2a2e37;
-  --color-accent: #3b82f6; /* Blue-500 */
+  /* Permukaan (nilai default = tema gelap) */
+  --color-canvas: #0e0f11;
+  --color-panel: #16181c;
+  --color-raised: #1d2127;
+  --color-hover: #252a31;
+  --color-line: #2a2f37;
+  --color-line-strong: #39404b;
+
+  /* Tinta */
+  --color-ink: #e7eaee;
+  --color-ink-2: #99a1ac;
+  --color-ink-3: #6a727d;
+
+  /* Aksen tunggal (biru instrumen) */
+  --color-accent: #3987e5;
+  --color-accent-hi: #5598e7;
+  --color-accent-dim: #1c5cab;
+
+  /* Semantik — hanya untuk status, tidak pernah jadi warna dekorasi */
+  --color-good: #199e70;
+  --color-warn: #c98500;
+  --color-danger: #e66767;
+
+  --font-sans: Arial, "Helvetica Neue", Helvetica, ui-sans-serif, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@layer base {
-  body {
-    background-color: var(--color-dark-bg);
-    color: #e5e7eb; /* gray-200 */
-    margin: 0;
-    padding: 0;
-    font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
-    overflow: hidden;
+/* Tema terang. Tema efektif selalu distempel ke <html data-theme="…"> oleh JS,
+   termasuk saat pengguna memilih "ikuti sistem", sehingga CSS cukup melihat
+   satu atribut dan tidak perlu menduga-duga. */
+:root[data-theme='light'] {
+  --color-canvas: #f6f7f9;
+  --color-panel: #ffffff;
+  --color-raised: #f1f3f6;
+  --color-hover: #e6e9ef;
+  --color-line: #dde1e8;
+  --color-line-strong: #bcc3ce;
+
+  --color-ink: #14171c;
+  --color-ink-2: #565e6b;
+  --color-ink-3: #7d8593;
+
+  --color-accent: #2a78d6;
+  --color-accent-hi: #1c5cab;
+  --color-accent-dim: #2a78d6;
+
+  --color-good: #0f7a55;
+  --color-warn: #9a6800;
+  --color-danger: #c93b3b;
+
+  color-scheme: light;
+}
+
+:root {
+  color-scheme: dark;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow: hidden;
+  /* Cegah iOS/Android membesarkan teks sendiri saat orientasi berubah.
+     Ketiga varian dibutuhkan: -webkit- untuk Safari/iOS, -moz- untuk Firefox,
+     tanpa prefiks untuk Chrome/Edge. */
+  -webkit-text-size-adjust: 100%;
+  -moz-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* iOS: 100vh ikut menghitung address bar sehingga konten terpotong.
+   dvh mengikuti viewport yang benar-benar terlihat. */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+}
+
+.safe-bottom {
+  padding-bottom: var(--safe-b);
+}
+.safe-top {
+  padding-top: var(--safe-t);
+}
+
+/* iOS Safari melakukan auto-zoom saat men-fokus input dengan font < 16px.
+   Kunci ukuran font kontrol form di layar sentuh kecil. */
+@media (max-width: 1023px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }
 
-/* Custom scrollbar for better look */
+/* Angka teknis harus sejajar antar baris */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* --------------------------------------------------------------------------
+   Komponen dasar
+   -------------------------------------------------------------------------- */
+@layer components {
+  .panel {
+    background-color: var(--color-panel);
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+  }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: 0;
+    color: var(--color-ink);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    text-align: left;
+  }
+  .panel-head:hover {
+    color: var(--color-accent-hi);
+  }
+
+  .panel-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 4px;
+    background-color: var(--color-raised);
+    border: 1px solid var(--color-line);
+    color: var(--color-ink-2);
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .panel-body {
+    padding: 0 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .field-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--color-ink-2);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+
+  .input,
+  .select {
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 10px;
+    background-color: var(--color-raised);
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    color: var(--color-ink);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 0.12s ease, background-color 0.12s ease;
+  }
+  .select {
+    padding-right: 26px;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--color-ink-3) 50%),
+      linear-gradient(135deg, var(--color-ink-3) 50%, transparent 50%);
+    background-position: calc(100% - 14px) calc(50% + 1px), calc(100% - 9px) calc(50% + 1px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  /* Menu dropdown digambar oleh sistem operasi: warnanya harus ditetapkan
+     eksplisit, kalau tidak sebagian browser memakai teks terang di latar
+     terang sehingga pilihan tidak terbaca. */
+  .select option {
+    background-color: var(--color-panel);
+    color: var(--color-ink);
+  }
+  .input:hover,
+  .select:hover {
+    border-color: var(--color-line-strong);
+  }
+  .input:focus,
+  .select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    background-color: var(--color-hover);
+  }
+  .input:disabled,
+  .select:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .input::placeholder {
+    color: var(--color-ink-3);
+  }
+
+  .input-key {
+    color: var(--color-accent-hi);
+    font-weight: 600;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--color-line);
+    background-color: var(--color-raised);
+    color: var(--color-ink);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) {
+    background-color: var(--color-hover);
+    border-color: var(--color-line-strong);
+  }
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(0.5px);
+  }
+
+  .btn-primary {
+    background-color: var(--color-accent-dim);
+    border-color: var(--color-accent);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-accent);
+    border-color: var(--color-accent-hi);
+  }
+
+  .btn-danger {
+    color: var(--color-danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: rgba(201, 59, 59, 0.14);
+    border-color: var(--color-danger);
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    border-color: transparent;
+    color: var(--color-ink-2);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--color-raised);
+    color: var(--color-ink);
+  }
+
+  /* Target sentuh minimum pada perangkat sentuh */
+  @media (pointer: coarse) {
+    .btn,
+    .input,
+    .select {
+      min-height: 40px;
+    }
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--color-line);
+    background-color: var(--color-raised);
+    color: var(--color-ink-2);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .chip-danger {
+    color: var(--color-danger);
+    border-color: rgba(201, 59, 59, 0.5);
+    background-color: rgba(201, 59, 59, 0.12);
+  }
+  .chip-warn {
+    color: var(--color-warn);
+    border-color: rgba(154, 104, 0, 0.5);
+    background-color: rgba(154, 104, 0, 0.13);
+  }
+  .chip-accent {
+    color: var(--color-accent-hi);
+    border-color: rgba(42, 120, 214, 0.45);
+    background-color: rgba(42, 120, 214, 0.14);
+  }
+
+  .checkbox {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    accent-color: var(--color-accent);
+    cursor: pointer;
+  }
+
+  .section-note {
+    color: var(--color-ink-3);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  .stat-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .stat-row dt {
+    color: var(--color-ink-2);
+  }
+  .stat-row dd {
+    margin: 0;
+    color: var(--color-ink);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Scrollbar tipis dan tenang */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: var(--color-dark-border);
-  border-radius: 4px;
+  background-color: var(--color-line);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #4b5563;
+  background-color: var(--color-line-strong);
+}
+
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* --------------------------------------------------------------------------
+   Cetak / Export PDF — dokumen terang, tanpa kroma layar
+   -------------------------------------------------------------------------- */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+  html,
+  body,
+  #root {
+    height: auto;
+    overflow: visible;
+    background: #fff !important;
+    color: #111 !important;
+  }
+  .app-shell {
+    height: auto;
+    display: block;
+  }
+  .panel {
+    background: #fff !important;
+    border-color: #d4d4d4 !important;
+  }
+  .print-hide {
+    display: none !important;
+  }
 }

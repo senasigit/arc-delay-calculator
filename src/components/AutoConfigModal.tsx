@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { SubwooferSettings, SetupType, VenueArea, SubwooferPreset } from '../types';
 import { db } from '../firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
+import { DEFAULT_SPEED_OF_SOUND } from '../utils';
 
 interface AutoConfigModalProps {
   onClose: () => void;
@@ -10,494 +11,586 @@ interface AutoConfigModalProps {
   areas: VenueArea[];
 }
 
-export const AutoConfigModal: React.FC<AutoConfigModalProps> = ({ onClose, onApply, currentSettings, areas }) => {
-  const [boxCount, setBoxCount] = useState<number>(Number(currentSettings.count) || 4);
-  const [priority, setPriority] = useState<'Coverage' | 'Throw' | 'Rejection' | 'Gradient' | 'Cardioid' | 'Balanced'>('Coverage');
-  const [alignmentStrategy, setAlignmentStrategy] = useState<'Monarchy' | 'Democracy'>('Democracy');
+type Priority = 'Balanced' | 'Coverage' | 'Throw' | 'Rejection' | 'Gradient' | 'Cardioid';
 
-  const [areaWidth, setAreaWidth] = useState<number>(20);
-  const [areaDepth, setAreaDepth] = useState<number>(30);
-  const [targetFreq, setTargetFreq] = useState<number>(Number(currentSettings.targetFrequency) || 63);
+const PRIORITIES: { id: Priority; label: string; hint: string }[] = [
+  { id: 'Balanced', label: 'Seimbang', hint: 'Even spread + stage rejection' },
+  { id: 'Coverage', label: 'Even spread', hint: 'Prioritas kerataan sisi ke sisi' },
+  { id: 'Throw', label: 'Lempar jauh', hint: 'Energi maksimum lurus ke depan' },
+  { id: 'Rejection', label: 'End-Fire', hint: 'Stage rejection, butuh ruang ke depan' },
+  { id: 'Gradient', label: 'Gradient', hint: 'Stage rejection, hemat ruang' },
+  { id: 'Cardioid', label: 'Cardioid tumpuk', hint: 'Stage rejection tanpa tambah baris' },
+];
 
-  const [recommendation, setRecommendation] = useState<Partial<SubwooferSettings> | null>(null);
-  const [explanation, setExplanation] = useState<string>('');
+const areaWidthOf = (a: VenueArea) =>
+  a.shape === 'Circle' || a.shape === 'Semicircle'
+    ? (Number(a.radius) || 0) * 2
+    : Math.max(Number(a.width) || 0, Number(a.topWidth) || 0, Number(a.bottomWidth) || 0);
 
-  const [isLR, setIsLR] = useState<boolean>(false);
-  const [audienceAreaId, setAudienceAreaId] = useState<string>('');
-  const [stageAreaId, setStageAreaId] = useState<string>('');
-  
+const areaDepthOf = (a: VenueArea) =>
+  a.shape === 'Circle' || a.shape === 'Semicircle' ? (Number(a.radius) || 0) * 2 : Number(a.height) || 0;
+
+export function AutoConfigModal({ onClose, onApply, currentSettings, areas }: AutoConfigModalProps) {
+  const [boxCount, setBoxCount] = useState(Math.max(2, Number(currentSettings.count) || 8));
+  const [priority, setPriority] = useState<Priority>('Balanced');
+  const [alignment, setAlignment] = useState<'Monarchy' | 'Democracy'>('Democracy');
+  const [areaWidth, setAreaWidth] = useState(20);
+  const [areaDepth, setAreaDepth] = useState(30);
+  const [targetFreq, setTargetFreq] = useState(Number(currentSettings.targetFrequency) || 63);
+  const [isLR, setIsLR] = useState(currentSettings.setupType.includes('L/R'));
+  const [audienceAreaIds, setAudienceAreaIds] = useState<string[]>([]);
+  const [stageAreaId, setStageAreaId] = useState('');
   const [savedPresets, setSavedPresets] = useState<SubwooferPreset[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = useState<string>(currentSettings.preset);
+  const [selectedPresetId, setSelectedPresetId] = useState(currentSettings.preset);
+  const [result, setResult] = useState<{ updates: Partial<SubwooferSettings>; notes: string[] } | null>(null);
+  // Hasil hitung yang tampil bisa jadi BASI: dihitung dari kombinasi target
+  // sebelumnya, sementara pengguna sudah mengubah pilihan tanpa menekan ulang
+  // "Hitung rekomendasi". Tanpa penanda ini, tombol "Terapkan ke project" bisa
+  // menerapkan angka yang tidak lagi cocok dengan target yang terlihat di layar.
+  const [resultStale, setResultStale] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'presets'), (snapshot) => {
-      const presetsData: SubwooferPreset[] = [];
-      snapshot.forEach((document) => {
-         presetsData.push({ id: document.id, ...document.data() } as SubwooferPreset);
-      });
-      setSavedPresets(presetsData);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'presets'),
+      (snap) => setSavedPresets(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as SubwooferPreset)),
+      (err) => console.error(err)
+    );
     return () => unsubscribe();
   }, []);
 
+  // Deteksi otomatis: SEMUA area bernama audience/penonton dijadikan target,
+  // area bernama stage/panggung dijadikan sumber.
   useEffect(() => {
-    // Try to auto-detect Audience area
-    const audienceArea = areas.find(a => a.name.toLowerCase().includes('audience') || a.name.toLowerCase().includes('penonton'));
-    if (audienceArea) {
-       setAudienceAreaId(audienceArea.id);
-       const width = audienceArea.shape === 'Circle' ? audienceArea.radius * 2 : Math.max(audienceArea.width || 0, audienceArea.topWidth || 0, audienceArea.bottomWidth || 0);
-       const depth = audienceArea.shape === 'Circle' ? audienceArea.radius * 2 : (audienceArea.height || 0);
-       if (width > 0) setAreaWidth(width);
-       if (depth > 0) setAreaDepth(depth);
-    }
-    const stageArea = areas.find(a => a.name.toLowerCase().includes('stage') || a.name.toLowerCase().includes('panggung'));
-    if (stageArea) {
-       setStageAreaId(stageArea.id);
-    }
+    const audience = areas.filter((a) => /audience|penonton/i.test(a.name));
+    if (audience.length) setAudienceAreaIds(audience.map((a) => a.id));
+    const stage = areas.find((a) => /stage|panggung/i.test(a.name));
+    if (stage) setStageAreaId(stage.id);
   }, [areas]);
 
-  const calculateRecommendedBoxes = () => {
-    const speedOfSound = Number(currentSettings.speedOfSound) || 343;
-    const lambda = speedOfSound / targetFreq;
-    const quarterLambda = lambda / 4;
-    const halfLambda = lambda / 2;
-    
-    let availableSpace = areaDepth; 
-    let availableWidth = areaWidth;
-    if (stageAreaId && audienceAreaId) {
-       const stageArea = areas.find(a => a.id === stageAreaId);
-       const audArea = areas.find(a => a.id === audienceAreaId);
-       if (stageArea && audArea) {
-          const stageFront = stageArea.y - ((stageArea.height || 0) / 2);
-          const audFront = audArea.y + ((audArea.height || 0) / 2);
-          availableSpace = Math.abs(stageFront - audFront);
-          
-          const sW = stageArea.shape === 'Circle' ? stageArea.radius * 2 : Math.max(stageArea.width || 0, stageArea.topWidth || 0, stageArea.bottomWidth || 0);
-          const aW = audArea.shape === 'Circle' ? audArea.radius * 2 : Math.max(audArea.width || 0, audArea.topWidth || 0, audArea.bottomWidth || 0);
-          // Prioritaskan lebar panggung, jika tidak ada, gunakan lebar penonton tapi batasi maksimal 12 meter
-          availableWidth = sW > 0 ? sW : Math.min(aW, 12);
-       }
+  /**
+   * Beberapa area target digabung menjadi satu kotak pembatas: array harus
+   * menutupi seluruhnya, jadi yang menentukan adalah rentang terluar — bukan
+   * ukuran satu area saja.
+   */
+  const targetBounds = useMemo(() => {
+    const picked = areas.filter((a) => audienceAreaIds.includes(a.id));
+    if (picked.length === 0) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const a of picked) {
+      const halfW = areaWidthOf(a) / 2;
+      const halfD = areaDepthOf(a) / 2;
+      minX = Math.min(minX, (Number(a.x) || 0) - halfW);
+      maxX = Math.max(maxX, (Number(a.x) || 0) + halfW);
+      minY = Math.min(minY, (Number(a.y) || 0) - halfD);
+      maxY = Math.max(maxY, (Number(a.y) || 0) + halfD);
     }
+    return { width: maxX - minX, depth: maxY - minY, nearest: minY, farthest: maxY, count: picked.length };
+  }, [areas, audienceAreaIds]);
 
-    // Target physical length is roughly 50% of the audience width to achieve good pattern control
-    // But constrained by available width
-    let targetLength = Math.min(areaWidth * 0.5, availableWidth);
-    
-    // Max columns that can physically fit
-    const maxColsFit = Math.floor(availableWidth / halfLambda) + 1;
-    let estCols = Math.ceil(targetLength / halfLambda) + 1;
-    if (estCols > maxColsFit) estCols = maxColsFit;
-    
-    let estTotal = estCols;
-    
-    if (priority === 'Rejection' || priority === 'Gradient' || priority === 'Balanced') {
-       if (availableSpace >= quarterLambda) {
-          estTotal = Math.max(4, estCols * 2); 
-       }
-    } else if (priority === 'Cardioid') {
-       estTotal = Math.max(3, estCols * 3);
-    }
-    
-    if (isLR) {
-       estTotal = Math.max(4, Math.ceil(estTotal / 2) * 2); 
-    }
-    
-    setBoxCount(Math.max(2, Math.min(estTotal, 48)));
-  };
+  // Ukuran manual mengikuti area terpilih. areaDepth BUKAN ukuran fisik area
+  // (itu targetBounds.depth) — ia adalah jarak array→audiens yang dipakai
+  // untuk menghitung sudut coverage, jadi diisi dari TITIK TENGAH audiens
+  // (rata-rata tepi terdekat & terjauh), bukan tepi terjauh saja. Memakai
+  // tepi terjauh akan membuat sudut yang dihitung terlalu sempit untuk
+  // penonton di baris depan.
+  useEffect(() => {
+    if (!targetBounds) return;
+    if (targetBounds.width > 0) setAreaWidth(Number(targetBounds.width.toFixed(1)));
+    const midDistance = (targetBounds.nearest + targetBounds.farthest) / 2;
+    if (midDistance > 0) setAreaDepth(Number(midDistance.toFixed(1)));
+  }, [targetBounds]);
 
-  const calculateConfig = () => {
-    const speedOfSound = Number(currentSettings.speedOfSound) || 343;
-    const lambda = speedOfSound / targetFreq;
-    const quarterLambda = lambda / 4;
-    const halfLambda = lambda / 2;
+  // Tandai hasil sebagai basi begitu SATU SAJA parameter target berubah —
+  // mencegah tombol "Terapkan" mengirim angka yang dihitung dari kombinasi
+  // target yang lama.
+  useEffect(() => {
+    setResultStale(true);
+  }, [
+    boxCount, priority, alignment, areaWidth, areaDepth, targetFreq, isLR,
+    audienceAreaIds, stageAreaId, selectedPresetId,
+  ]);
 
-    let availableSpace = 100;
-    let availableWidth = areaWidth;
-    const audienceArea = areas.find(a => a.id === audienceAreaId);
-    const stageArea = areas.find(a => a.id === stageAreaId);
-    if (audienceArea && stageArea) {
-      const stageBottom = stageArea.y + (stageArea.shape === 'Circle' ? stageArea.radius * 2 : (stageArea.height || 0));
-      const audienceTop = audienceArea.y;
-      if (audienceTop > stageBottom) {
-         availableSpace = audienceTop - stageBottom;
+  const c = Number(currentSettings.speedOfSound) || DEFAULT_SPEED_OF_SOUND;
+  const preset = savedPresets.find((p) => p.id === selectedPresetId);
+
+  // Rotasi Landscape↔Portrait menukar Width dan Height box (berputar pada
+  // sumbu depth-nya) — BUKAN Width dan Depth. Depth (jarak box ke audiens)
+  // tidak pernah berubah oleh rotasi ini. Mengikuti persis kalkulator arc
+  // delay resmi (lihat utils.ts calculateArcDelay untuk penjelasan lengkap).
+  const boxWidth = useMemo(() => {
+    const w = preset ? preset.width : Number(currentSettings.width) || 0;
+    const h = preset ? preset.height : Number(currentSettings.height) || 0;
+    const dim = currentSettings.orientation === 'Landscape' ? w : h;
+    return dim > 0 ? dim : 1.1;
+  }, [preset, currentSettings]);
+
+  const boxDepth = useMemo(() => {
+    const d = preset ? preset.depth : Number(currentSettings.depth) || 0;
+    return d > 0 ? d : 0.6;
+  }, [preset, currentSettings]);
+
+  /** Lebar & kedalaman ruang pasang yang benar-benar tersedia. */
+  const geometry = useMemo(() => {
+    const stage = areas.find((a) => a.id === stageAreaId);
+
+    let installWidth = areaWidth;
+    let freeDepth = Infinity;
+
+    if (stage) {
+      const sw = areaWidthOf(stage);
+      if (sw > 0) installWidth = sw;
+      if (targetBounds) {
+        // Ruang kosong antara bibir panggung dan baris penonton terdepan.
+        const stageFront = (Number(stage.y) || 0) + areaDepthOf(stage) / 2;
+        freeDepth = Math.max(0, targetBounds.nearest - stageFront);
       }
-      
-      const sW = stageArea.shape === 'Circle' ? stageArea.radius * 2 : Math.max(stageArea.width || 0, stageArea.topWidth || 0, stageArea.bottomWidth || 0);
-      const aW = audienceArea.shape === 'Circle' ? audienceArea.radius * 2 : Math.max(audienceArea.width || 0, audienceArea.topWidth || 0, audienceArea.bottomWidth || 0);
-      availableWidth = sW > 0 ? sW : Math.min(aW, 12);
     }
+    return { installWidth, freeDepth };
+  }, [areas, targetBounds, stageAreaId, areaWidth]);
 
-    let recSetup: SetupType = isLR ? 'L/R' : 'Curved Array';
-    let recTheta = 0;
-    let recGap = halfLambda;
-    let recRows = 1;
-    let recRowSpacing = 0;
-    let recCount = boxCount;
-    let reason = '';
+  const compute = () => {
+    const lambda = c / Math.max(targetFreq, 1);
+    const quarter = lambda / 4;
+    const half = lambda / 2;
+    const notes: string[] = [];
+
+    // --- Jarak antar kolom -------------------------------------------------
+    // λ/4 menjaga koherensi sampai 2× frekuensi target; λ/2 sampai target itu
+    // sendiri. Pilih yang lebih rapat selama box masih muat.
+    let spacing = Math.max(quarter, boxWidth);
+    let spacingLabel = '¼ λ';
+    if (spacing > quarter + 1e-6) {
+      spacing = Math.max(half, boxWidth);
+      spacingLabel = spacing > half + 1e-6 ? 'rapat maksimum (box bersentuhan)' : '½ λ';
+      notes.push(
+        `Box selebar ${boxWidth.toFixed(2)} m tidak muat pada jarak ¼ λ (${quarter.toFixed(2)} m); dipakai ${spacingLabel}.`
+      );
+    }
+    const aliasing = c / (2 * spacing);
+
+    // --- Baris & tumpukan per prioritas ------------------------------------
+    let setup: SetupType;
+    let rows = 1;
+    let rowSpacing = 0;
+    let cardioid = false;
     let invertRear = false;
+    let reversed: boolean[] | undefined;
+    let reason: string;
 
-    let cardioidRev: boolean[] | undefined;
-    const selectedPreset = savedPresets.find(p => p.id === selectedPresetId);
-    const cardDelayMs = selectedPreset?.defaultCardioidDelay ?? 4;
-    const boxWidth = selectedPreset?.width ?? 0.6;
-    
-    // gap is physical distance between edges, so acoustic spacing = gap + boxWidth
-    const maxAcousticSpacing = speedOfSound / (2 * 99);
-    let idealAcousticSpacing = halfLambda;
-    let gapLabel = "1/2 Lambda";
-    
-    if (halfLambda > maxAcousticSpacing) {
-        if (quarterLambda <= maxAcousticSpacing) {
-            idealAcousticSpacing = quarterLambda;
-            gapLabel = "1/4 Lambda";
-        } else {
-            idealAcousticSpacing = maxAcousticSpacing;
-            gapLabel = "Maksimum (Batas 99Hz)";
+    switch (priority) {
+      case 'Rejection':
+        rows = 4;
+        rowSpacing = quarter;
+        setup = isLR ? 'End-Fire L/R' : 'End-Fire';
+        reason = `End-Fire ${rows} elemen dengan jarak ¼ λ. Tiap elemen di-delay ${((quarter / c) * 1000).toFixed(2)} ms agar muka gelombang menumpuk ke depan.`;
+        if (geometry.freeDepth < rows * quarter) {
+          rows = Math.max(2, Math.floor(geometry.freeDepth / quarter));
+          if (geometry.freeDepth < 2 * quarter) {
+            setup = isLR ? 'Cardioid L/R' : 'Gradient In-Line';
+            rows = 2;
+            cardioid = true;
+            invertRear = true;
+            reason = `Ruang depan panggung hanya ${geometry.freeDepth.toFixed(1)} m — tidak cukup untuk End-Fire. Dialihkan ke ${setup} yang hanya butuh ${quarter.toFixed(2)} m.`;
+          } else {
+            reason = `End-Fire dipangkas jadi ${rows} elemen agar muat di ruang ${geometry.freeDepth.toFixed(1)} m.`;
+          }
         }
+        break;
+
+      case 'Gradient':
+        setup = isLR ? 'Cardioid L/R' : 'Gradient In-Line';
+        rows = 2;
+        rowSpacing = quarter;
+        cardioid = true;
+        invertRear = true;
+        reason = `Gradient 2 baris: baris belakang dibalik polaritas dan di-delay ${((quarter / c) * 1000).toFixed(2)} ms sehingga energi ke arah panggung saling meniadakan.`;
+        break;
+
+      case 'Cardioid':
+        // Straight, bukan Curved: susunan cardioid tumpuk tetap lurus di
+        // depan panggung — rejection datang dari pembalikan polaritas antar
+        // tumpukan, bukan dari melengkungkan barisnya.
+        setup = isLR ? 'Cardioid L/R' : 'Straight Delayed Array';
+        rows = 1;
+        cardioid = true;
+        invertRear = true;
+        reversed = [true, false, false];
+        reason = `Cardioid tumpuk: box paling bawah diputar menghadap belakang, dibalik polaritas, dan di-delay ${((boxDepth / c) * 1000).toFixed(2)} ms. Tidak menambah kedalaman panggung.`;
+        break;
+
+      case 'Throw':
+        setup = isLR ? 'L/R' : 'Straight Delayed Array';
+        reason = 'Array lurus tanpa busur — seluruh energi terfokus lurus ke depan, jangkauan maksimum di sumbu tengah.';
+        break;
+
+      case 'Coverage':
+        // Box tetap lurus di depan panggung (praktik standar); busur coverage
+        // dibentuk lewat delay per box, bukan menggeser posisi fisiknya.
+        setup = isLR ? 'L/R' : 'Straight Delayed Array';
+        reason = 'Box tetap lurus di depan panggung — busur coverage dibentuk lewat delay (Arc Delay), bukan dengan membengkokkan posisi fisik.';
+        break;
+
+      default: // Balanced
+        setup = isLR ? 'Cardioid L/R' : 'Straight Delayed Array';
+        rows = 2;
+        rowSpacing = quarter;
+        cardioid = true;
+        invertRear = true;
+        reason = `Kombinasi: busur ditiru lewat delay (array tetap lurus, mudah dipasang) plus baris kedua sebagai gradient untuk membersihkan panggung.`;
     }
-    
-    recGap = Math.max(0, idealAcousticSpacing - boxWidth);
 
-    const angleRad = 2 * Math.atan((areaWidth / 2) / areaDepth);
-    const calculatedTheta = Math.round(angleRad * (180 / Math.PI));
-    
-    // Apply Democracy vs Monarchy rules
-    if (alignmentStrategy === 'Democracy') {
-       if (isLR) {
-          reason += "⚠️ DEMOCRACY: Anda memilih setup L/R yang inherently memiliki Power Alleys. Untuk hasil penyebaran merata, sangat disarankan menggunakan setup Center (seperti Curved Array / Arc).\n";
-       }
-    } else {
-       if (!isLR && priority === 'Coverage') {
-          reason += "👑 MONARCHY: Fokus fase sempurna di FOH. Memaksimalkan impact di tengah namun mengorbankan pinggiran.\n";
-       }
-    }
-
-    if (priority === 'Coverage') {
-      recSetup = isLR ? 'L/R' : 'Curved Array';
-      recTheta = calculatedTheta;
-      reason += isLR 
-        ? `L/R Array dipilih karena konfigurasi dipaksa Kiri/Kanan. Jarak antar box diset ke ${gapLabel} untuk menjaga batas frekuensi atas (>= 99Hz).` 
-        : `Curved Array dipilih untuk menyebarkan suara merata ke lebar ${areaWidth}m. Sudut (Theta) diatur ke ${recTheta}°. Spacing diset ke ${gapLabel} (menjaga aliasing di atas 99Hz).`;
-        
-    } else if (priority === 'Throw') {
-      recSetup = isLR ? 'L/R' : 'Straight Delayed Array'; 
-      recTheta = 0; 
-      reason += isLR
-        ? "Setup L/R lurus dipilih untuk memfokuskan energi lurus ke depan sejauh mungkin."
-        : `Straight Array (0°) dipilih untuk daya dorong ke depan secara maksimum. Jarak ${gapLabel}.`;
-        
-    } else if (priority === 'Cardioid') {
-      recSetup = isLR ? 'L/R' : 'Curved Array';
-      recTheta = calculatedTheta;
-      recRows = 1;
-      invertRear = true; // MUST BE TRUE for Cardioid Tumpuk to work
-      
-      let stackNeeded = 3;
-      if (boxCount < 3) stackNeeded = 2; 
-      
-      recCount = Math.max(1, Math.floor(boxCount / stackNeeded));
-      if (isLR && recCount < 2) recCount = 2;
-      
-      cardioidRev = stackNeeded === 3 ? [true, false, false] : [true, false]; 
-      
-      reason = isLR 
-         ? `Cardioid L/R dipilih! Disusun menumpuk (stacked). Box paling bawah menghadap ke belakang (di-invert & di-delay) untuk meredam panggung.`
-         : `Cardioid (Tumpuk) dipilih! Terdapat ${recCount} kolom tersusun melengkung sebesar ${recTheta}°. Box paling bawah di-reverse untuk meredam panggung.`;
-
-    } else if (priority === 'Rejection') {
-      recSetup = isLR ? 'End-Fire L/R' : 'End-Fire';
-      recRows = 2; 
-      recCount = Math.floor(boxCount / 2);
-      if (recCount < 1) recCount = 1;
-      recRowSpacing = quarterLambda;
-      
-      if (availableSpace < quarterLambda) {
-         recSetup = isLR ? 'Cardioid L/R' : 'Gradient In-Line';
-         invertRear = true;
-         reason = `🚨 Ruang kosong panggung (${availableSpace.toFixed(1)}m) tidak cukup untuk End-Fire! Beralih ke ${recSetup} untuk menolak bass dengan aman.`;
+    // --- Sudut busur -------------------------------------------------------
+    // Asisten tidak pernah merekomendasikan 'Curved Array' (bengkok fisik) —
+    // hanya 'Straight Delayed Array', sesuai praktik lapangan.
+    const audienceAngle = Math.round(2 * Math.atan(areaWidth / 2 / Math.max(areaDepth, 1)) * (180 / Math.PI));
+    const supportsArc = setup === 'Straight Delayed Array';
+    let theta = 0;
+    if (supportsArc) {
+      if (alignment === 'Democracy') {
+        theta = audienceAngle;
+        notes.push(
+          `Democracy: busur dibuka ${theta}° mengikuti sudut penonton, error fase dibagi rata ke seluruh area.`
+        );
       } else {
-         reason = `${recSetup} (2-Elemen) dipilih. Jarak antar kolom ${gapLabel} (efisien) dan jarak belakang 1/4 Lambda. Konfigurasi ini mendorong bass maju sejauh mungkin.`;
+        theta = 0;
+        notes.push('Monarchy: busur ditutup (0°) agar seluruh box sefase sempurna di sumbu tengah — pinggiran dikorbankan.');
       }
-    } else if (priority === 'Gradient') {
-      recSetup = isLR ? 'Cardioid L/R' : 'Gradient In-Line';
-      recRows = 2;
-      recCount = Math.floor(boxCount / 2);
-      if (recCount < 1) recCount = 1;
-      recRowSpacing = quarterLambda;
-      invertRear = true;
-      reason = isLR 
-         ? `Gradient L/R dipilih! Disusun 2 baris (depan-belakang). Invert Polarity aktif, jarak belakang 1/4 Lambda.`
-         : `Gradient Array dipilih! Disusun ${recCount} kolom x 2 baris untuk membatalkan suara ke panggung (Rejection). Invert Polarity aktif dan jarak 1/4 Lambda.`;
-    } else if (priority === 'Balanced') {
-      recSetup = isLR ? 'L/R' : 'Straight Delayed Array';
-      recRows = 2;
-      recTheta = calculatedTheta;
-      recRowSpacing = quarterLambda;
-      recCount = Math.floor(boxCount / 2);
-      if (recCount < 1) recCount = 1;
-      invertRear = true;
-      
-      reason = isLR 
-        ? `The Holy Grail L/R: Kombinasi jarak ke samping ${gapLabel} (efisiensi terjaga) dan 1/4 Lambda ke belakang (rejection belakang maksimal).`
-        : `🌟 THE HOLY GRAIL (Balanced): Straight Delayed Array dikombinasikan dengan Gradient 2-Baris! Jarak antar kolom ${gapLabel} menjaga aliasing di atas 99Hz. Otomatis di-delay untuk menyebar merata ${recTheta}°. Baris belakang berjarak 1/4 Lambda menyapu bersih panggung!`;
     }
 
-    const physicalGap = recGap > 0 ? recGap : 1;
-    let maxCols = Math.floor(availableWidth / physicalGap) + 1;
-    if (isLR) {
-       maxCols = Math.max(2, Math.floor(maxCols / 2) * 2); 
+    // --- Bagi jumlah box ---------------------------------------------------
+    // N kolom berjarak `spacing` (pusat-ke-pusat) butuh lebar fisik
+    // (N-1)*spacing + lebar box (box terluar menonjol separuh lebarnya di
+    // tiap ujung) — lebar box HARUS dikurangi dulu sebelum dibagi, kalau
+    // tidak jumlah kolom yang direkomendasikan bisa kelebihan dan tidak
+    // muat di lebar panggung yang sebenarnya.
+    const maxColumnsByWidth = Math.max(1, Math.floor((geometry.installWidth - boxWidth) / spacing) + 1);
+    let columns = Math.max(1, Math.floor(boxCount / rows));
+    if (columns > maxColumnsByWidth) {
+      columns = maxColumnsByWidth;
+      notes.push(`Lebar pasang ${geometry.installWidth.toFixed(1)} m hanya memuat ${columns} kolom.`);
     }
-    if (maxCols < 1) maxCols = 1;
-    
-    let finalCount = Math.min(recCount, maxCols);
-    if (isLR && finalCount < 2) finalCount = 2; 
-    
-    let finalStack = Math.floor(boxCount / (finalCount * recRows));
-    if (finalStack < 1) finalStack = 1;
-    
-    if (finalStack > 1) {
-       reason += ` Lahan horisontal (${availableWidth.toFixed(1)}m) terbatas, box di-stack setinggi ${finalStack} tumpukan.`;
+    if (isLR) columns = Math.max(2, Math.floor(columns / 2) * 2);
+
+    let stack = Math.max(1, Math.floor(boxCount / (columns * rows)));
+    if (priority === 'Cardioid' && stack < 3) {
+      stack = 3;
+      columns = Math.max(1, Math.floor(boxCount / (stack * rows)));
+      if (isLR) columns = Math.max(2, Math.floor(columns / 2) * 2);
+      notes.push('Cardioid tumpuk butuh minimal 3 box per kolom (1 menghadap belakang, 2 ke depan).');
     }
 
-    const recOutput: any = {
-      setupType: recSetup,
-      count: finalCount,
-      theta: recTheta,
-      gap: parseFloat(recGap.toFixed(2)),
-      rowSpacing: parseFloat(recRowSpacing.toFixed(2)),
-      centralGap: parseFloat((recGap + boxWidth).toFixed(2)),
-      rows: recRows,
-      stack: finalStack,
+    const used = columns * rows * stack;
+    if (used < boxCount) notes.push(`${boxCount - used} box tersisa tidak terpakai pada susunan ini.`);
+    if (aliasing < 100) notes.push(`Spatial aliasing mulai di ${aliasing.toFixed(0)} Hz.`);
+
+    const cardioidDelay =
+      priority === 'Cardioid'
+        ? (boxDepth / c) * 1000
+        : rows > 1
+          ? (rowSpacing / c) * 1000
+          : Number(currentSettings.cardioidDelay) || 0;
+
+    const updates: Partial<SubwooferSettings> = {
+      setupType: setup,
+      count: columns,
+      rows,
+      stack,
+      theta,
+      // gap = celah tepi-ke-tepi; centralGap = jarak pusat-ke-pusat (celah +
+      // lebar box) — disamakan sebagai array seragam secara default.
+      gap: Number(Math.max(0, spacing - boxWidth).toFixed(3)),
+      centralGap: Number(spacing.toFixed(3)),
+      rowSpacing: Number(rowSpacing.toFixed(3)),
       targetFrequency: targetFreq,
+      cardioid,
       invertRearPolarity: invertRear,
-      cardioid: (priority === 'Cardioid' || priority === 'Balanced' || priority === 'Gradient' || priority === 'Rejection'),
+      cardioidDelay: Number(cardioidDelay.toFixed(2)),
     };
-    
-    if (priority === 'Cardioid' && cardioidRev) {
-       recOutput.cardioidReversedBoxes = cardioidRev;
-       recOutput.cardioidDelay = cardDelayMs;
-    } else if (priority === 'Balanced' || priority === 'Gradient') {
-       recOutput.cardioidDelay = cardDelayMs;
+    if (reversed) updates.cardioidReversedBoxes = reversed;
+    if (isLR && !Number(currentSettings.stageWidth)) {
+      updates.stageWidth = Number(geometry.installWidth.toFixed(1)) || 12;
+    }
+    if (preset) {
+      updates.preset = preset.id;
+      updates.width = preset.width;
+      updates.height = preset.height;
+      updates.depth = preset.depth;
+      if (preset.defaultCardioidDelay !== undefined && priority === 'Cardioid') {
+        updates.cardioidDelay = preset.defaultCardioidDelay;
+      }
     }
 
-    if (selectedPresetId !== 'Custom') {
-       const selectedPreset = savedPresets.find(p => p.id === selectedPresetId);
-       if (selectedPreset) {
-         recOutput.preset = selectedPresetId;
-         recOutput.width = selectedPreset.width;
-         recOutput.height = selectedPreset.height;
-         recOutput.depth = selectedPreset.depth;
-         if (recOutput.cardioid && selectedPreset.defaultCardioidDelay !== undefined) {
-            recOutput.cardioidDelay = selectedPreset.defaultCardioidDelay;
-         }
-       }
-    }
-
-    setRecommendation(recOutput);
-    setExplanation(reason);
+    setResult({ updates, notes: [reason, ...notes] });
+    setResultStale(false);
   };
 
-  const handleApply = () => {
-    if (recommendation) {
-      onApply(recommendation);
-      onClose();
-    }
+  const apply = () => {
+    if (!result || resultStale) return;
+    onApply(result.updates);
+    onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-gradient-to-b from-zinc-900/80 to-black border border-white/10 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center p-4 border-b border-white/10 bg-indigo-900/20">
-          <h2 className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center">
-            <span className="mr-2 text-xl">🤖</span> Sena Recomendation
-          </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-black/75 backdrop-blur-sm">
+      <div className="panel w-full max-w-lg max-h-[88dvh] flex flex-col shadow-2xl">
+        <header className="flex-none flex items-center justify-between px-4 py-3 border-b border-line">
+          <div>
+            <h2 className="text-sm font-semibold">Asisten konfigurasi</h2>
+            <p className="text-[11px] text-ink-3">Usulan susunan dari geometri venue dan jumlah box</p>
+          </div>
+          <button className="btn btn-ghost px-2" onClick={onClose} aria-label="Tutup">
+            ✕
           </button>
-        </div>
+        </header>
 
-        <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto overflow-x-hidden">
-          <div className="grid grid-cols-2 gap-4">
+        <div className="flex-1 scroll-y px-4 py-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-bold text-gray-400">Jumlah Subwoofer</label>
-                <button onClick={calculateRecommendedBoxes} className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30 hover:bg-indigo-500/40 transition-colors" title="Hitung estimasi box ideal berdasarkan ukuran area">🪄 Hitung Ideal</button>
-              </div>
-              <input type="number" min="2" value={boxCount} onChange={(e) => setBoxCount(Number(e.target.value))} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 mb-1">Target Freq (Hz)</label>
-              <input type="number" value={targetFreq} onChange={(e) => setTargetFreq(Number(e.target.value))} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-          
-          <div className="mb-4">
-            <label className="block text-xs font-bold text-gray-400 mb-1">Strategi Penyelarasan Spasial (Error Redistribution)</label>
-            <div className="flex bg-black/40 border border-indigo-500/30 rounded-lg p-1">
-              <button 
-                type="button"
-                onClick={() => setAlignmentStrategy('Monarchy')}
-                className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${alignmentStrategy === 'Monarchy' ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-              >
-                👑 Monarchy (FOH Impact)
-              </button>
-              <button 
-                type="button"
-                onClick={() => setAlignmentStrategy('Democracy')}
-                className={`flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all ${alignmentStrategy === 'Democracy' ? 'bg-indigo-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-              >
-                🤝 Democracy (Pemerataan)
-              </button>
-            </div>
-            <p className="text-[9px] text-gray-500 mt-1">
-               {alignmentStrategy === 'Monarchy' ? 'Fokus menyelaraskan fase sempurna di satu titik (FOH), mengorbankan area lain (berisiko Power Alleys).' : 'Fokus mendistribusikan error secara spasial agar fase merata ke seluruh penonton, mengurangi parahnya Power Alleys.'}
-            </p>
-          </div>
-
-          <div className="mb-4">
-            <label className="block text-xs font-bold text-gray-400 mb-1">Preset Subwoofer</label>
-            <select value={selectedPresetId} onChange={(e) => setSelectedPresetId(e.target.value)} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500">
-              <option value="Custom">Custom (Manual)</option>
-              {savedPresets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-gray-400 mb-1">Target Area (Audience)</label>
-              <select value={audienceAreaId} onChange={(e) => {
-                setAudienceAreaId(e.target.value);
-                const area = areas.find(a => a.id === e.target.value);
-                if (area) {
-                  const width = area.shape === 'Circle' ? area.radius * 2 : Math.max(area.width || 0, area.topWidth || 0, area.bottomWidth || 0);
-                  const depth = area.shape === 'Circle' ? area.radius * 2 : (area.height || 0);
-                  if (width > 0) setAreaWidth(width);
-                  if (depth > 0) setAreaDepth(depth);
-                }
-              }} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500">
-                <option value="">-- Pilih Area (Manual) --</option>
-                {areas.map(a => <option key={a.id} value={a.id}>{a.name} ({a.shape})</option>)}
-              </select>
+              <label htmlFor="acCount" className="field-label">
+                Total box tersedia
+              </label>
+              <input
+                id="acCount"
+                type="number"
+                inputMode="numeric"
+                className="input"
+                min={2}
+                value={boxCount}
+                onChange={(e) => setBoxCount(Math.max(1, Number(e.target.value) || 0))}
+              />
             </div>
             <div>
-              <label className="block text-xs font-bold text-gray-400 mb-1">Sumber Area (Stage)</label>
-              <select value={stageAreaId} onChange={(e) => setStageAreaId(e.target.value)} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500">
-                <option value="">-- Pilih Area (Abaikan) --</option>
-                {areas.map(a => <option key={a.id} value={a.id}>{a.name} ({a.shape})</option>)}
-              </select>
+              <label htmlFor="acFreq" className="field-label">
+                Frekuensi target (Hz)
+              </label>
+              <input
+                id="acFreq"
+                type="number"
+                inputMode="decimal"
+                className="input"
+                value={targetFreq}
+                onChange={(e) => setTargetFreq(Math.max(1, Number(e.target.value) || 0))}
+              />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-gray-400 mb-1">Lebar Area Audience (m)</label>
-              <input type="number" value={areaWidth} onChange={(e) => setAreaWidth(Number(e.target.value))} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 mb-1">Kedalaman Area Audience (m)</label>
-              <input type="number" value={areaDepth} onChange={(e) => setAreaDepth(Number(e.target.value))} className="w-full bg-white/5 border border-indigo-500/30 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-          {areas.length === 0 && (
-            <div className="text-xs text-yellow-500 bg-yellow-500/10 border border-yellow-500/30 p-2 rounded">
-              💡 <strong>Tips:</strong> Buat area bernama "Audience" dan "Stage" di Area Manager agar ukuran & spasi diisi otomatis!
-            </div>
-          )}
-          
-          <div className="flex items-center bg-indigo-900/20 px-3 py-2 rounded-lg border border-indigo-500/30">
-            <input type="checkbox" id="isLR" checked={isLR} onChange={e => setIsLR(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-indigo-400 focus:ring-indigo-500 bg-black/20" />
-            <label htmlFor="isLR" className="ml-2 text-xs font-bold text-indigo-300 cursor-pointer">Harus L/R (Pisahkan ke Kiri & Kanan Panggung)</label>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-gray-400 mb-2">Fokus Utama (Prioritas)</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button 
-                onClick={() => setPriority('Balanced')}
-                className={`col-span-2 py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Balanced' ? 'bg-pink-500/20 border-pink-400 text-pink-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
+            <label htmlFor="acPreset" className="field-label">
+              Preset box
+            </label>
+            <select id="acPreset" className="select" value={selectedPresetId} onChange={(e) => setSelectedPresetId(e.target.value)}>
+              <option value="Custom">Pakai dimensi saat ini</option>
+              {savedPresets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="field-label mb-0">Area target penyebaran</span>
+              {areas.length > 1 && (
+                <button
+                  className="btn min-h-0 py-0.5 px-2 text-[10px]"
+                  onClick={() =>
+                    setAudienceAreaIds((prev) => (prev.length === areas.length ? [] : areas.map((a) => a.id)))
+                  }
+                >
+                  {audienceAreaIds.length === areas.length ? 'Kosongkan' : 'Pilih semua'}
+                </button>
+              )}
+            </div>
+            {areas.length === 0 ? (
+              <p className="section-note">Belum ada area — isi ukuran manual di bawah.</p>
+            ) : (
+              <ul className="space-y-1 max-h-40 overflow-y-auto">
+                {areas.map((area) => {
+                  const checked = audienceAreaIds.includes(area.id);
+                  return (
+                    <li key={area.id}>
+                      <label
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded border cursor-pointer text-[11px] ${
+                          checked ? 'border-accent bg-accent/12 text-ink' : 'border-line bg-raised text-ink-2'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox"
+                          checked={checked}
+                          onChange={(e) =>
+                            setAudienceAreaIds((prev) =>
+                              e.target.checked ? [...prev, area.id] : prev.filter((id) => id !== area.id)
+                            )
+                          }
+                        />
+                        <span className="w-2.5 h-2.5 rounded-sm flex-none" style={{ backgroundColor: area.color }} />
+                        <span className="truncate flex-1">{area.name}</span>
+                        <span className="text-ink-3 tnum flex-none">
+                          {areaWidthOf(area).toFixed(0)}×{areaDepthOf(area).toFixed(0)} m
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {targetBounds && (
+              <p className="section-note mt-1">
+                {targetBounds.count} area digabung → rentang {targetBounds.width.toFixed(1)} m ×{' '}
+                {targetBounds.depth.toFixed(1)} m, terjauh {targetBounds.farthest.toFixed(1)} m.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="acStage" className="field-label">
+              Area panggung (sumber rejection)
+            </label>
+            <select id="acStage" className="select" value={stageAreaId} onChange={(e) => setStageAreaId(e.target.value)}>
+              <option value="">Abaikan</option>
+              {areas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="acW" className="field-label">
+                Lebar area target (m)
+              </label>
+              <input
+                id="acW"
+                type="number"
+                inputMode="decimal"
+                className="input"
+                value={areaWidth}
+                onChange={(e) => setAreaWidth(Math.max(0, Number(e.target.value) || 0))}
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="acD"
+                className="field-label"
+                title="Jarak dari array ke titik tengah audiens — dipakai untuk menghitung sudut coverage, BUKAN ukuran fisik area"
               >
-                🌟 Paling Terbaik (The Holy Grail)
-              </button>
-              <button 
-                onClick={() => setPriority('Coverage')}
-                className={`py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Coverage' ? 'bg-blue-500/20 border-blue-400 text-blue-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
-              >
-                📡 Merata (Coverage)
-              </button>
-              <button 
-                onClick={() => setPriority('Throw')}
-                className={`py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Throw' ? 'bg-orange-500/20 border-orange-400 text-orange-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
-              >
-                🚀 Tembak Jauh (Throw)
-              </button>
-              <button 
-                onClick={() => setPriority('Rejection')}
-                className={`py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Rejection' ? 'bg-purple-500/20 border-purple-400 text-purple-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
-              >
-                Maju (End-Fire)
-              </button>
-              <button 
-                onClick={() => setPriority('Gradient')}
-                className={`py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Gradient' ? 'bg-teal-500/20 border-teal-400 text-teal-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
-              >
-                Mundur (Gradient)
-              </button>
-              <button 
-                onClick={() => setPriority('Cardioid')}
-                className={`py-2 px-1 rounded border text-xs font-bold transition-all ${priority === 'Cardioid' ? 'bg-pink-500/20 border-pink-400 text-pink-300' : 'bg-white/5 border-white/10 text-gray-500 hover:bg-white/10'}`}
-              >
-                Tumpuk (Cardioid)
-              </button>
+                Jarak array → tengah audiens (m)
+              </label>
+              <input
+                id="acD"
+                type="number"
+                inputMode="decimal"
+                className="input"
+                value={areaDepth}
+                onChange={(e) => setAreaDepth(Math.max(0, Number(e.target.value) || 0))}
+              />
             </div>
           </div>
 
-          <button onClick={calculateConfig} className="w-full py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-lg transition-all active:scale-95">
-            ✨ Hitung Rekomendasi
+          {areas.length === 0 && (
+            <p className="section-note">
+              Buat area di panel Area Venue — beri nama "Audience" dan "Stage" agar langsung terpilih otomatis.
+            </p>
+          )}
+
+          <div>
+            <span className="field-label">Strategi penyelarasan spasial</span>
+            <div className="flex gap-1 p-1 bg-raised border border-line rounded">
+              {(['Democracy', 'Monarchy'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setAlignment(mode)}
+                  className={`flex-1 py-1.5 rounded text-[11px] font-semibold transition-colors ${
+                    alignment === mode ? 'bg-accent-dim text-white' : 'text-ink-2 hover:text-ink'
+                  }`}
+                >
+                  {mode === 'Democracy' ? 'Democracy — merata' : 'Monarchy — fokus tengah'}
+                </button>
+              ))}
+            </div>
+            <p className="section-note mt-1">
+              {alignment === 'Democracy'
+                ? 'Error fase dibagi rata ke seluruh penonton; busur dibuka mengikuti sudut area.'
+                : 'Seluruh box sefase sempurna di satu titik (FOH); busur ditutup, pinggiran menerima lebih sedikit.'}
+            </p>
+          </div>
+
+          <label className="flex items-center gap-2 cursor-pointer bg-raised border border-line rounded px-3 py-2">
+            <input type="checkbox" className="checkbox" checked={isLR} onChange={(e) => setIsLR(e.target.checked)} />
+            <span className="text-xs font-semibold">Wajib dipisah kiri &amp; kanan panggung</span>
+          </label>
+          {isLR && (
+            <p className="text-[11px] text-warn leading-snug">
+              Susunan L/R selalu menghasilkan power alley di tengah penonton. Bila memungkinkan, susunan terpusat
+              memberi kerataan yang jauh lebih baik.
+            </p>
+          )}
+
+          <div>
+            <span className="field-label">Prioritas</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              {PRIORITIES.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPriority(p.id)}
+                  className={`text-left px-2.5 py-2 rounded border text-[11px] transition-colors ${
+                    priority === p.id ? 'border-accent bg-accent/12 text-ink' : 'border-line bg-raised text-ink-2 hover:border-line-strong'
+                  }`}
+                >
+                  <span className="block font-semibold">{p.label}</span>
+                  <span className="block text-ink-3 text-[10px]">{p.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button className="btn btn-primary w-full" onClick={compute}>
+            {resultStale && result ? 'Hitung ulang rekomendasi' : 'Hitung rekomendasi'}
           </button>
 
-          {recommendation && (
-            <div className="mt-4 p-4 rounded-lg bg-indigo-950/40 border border-indigo-500/30 space-y-3">
-               <div className="flex justify-between items-center border-b border-indigo-500/20 pb-2">
-                 <span className="text-xs text-indigo-300 uppercase font-bold tracking-wider">Hasil Rekomendasi</span>
-                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-500/20 text-green-400 border border-green-500/30">Siap Diterapkan</span>
-               </div>
-               
-               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                 <div className="flex justify-between">
-                   <span className="text-gray-400">Tipe Setup:</span>
-                   <span className="font-bold text-white">{recommendation.setupType}</span>
-                 </div>
-                 {recommendation.setupType === 'Curved Array' && Number(recommendation.theta) > 0 && (
-                   <div className="flex justify-between">
-                     <span className="text-gray-400">Sudut (Theta):</span>
-                     <span className="font-bold text-yellow-400">{recommendation.theta}°</span>
-                   </div>
-                 )}
-                 {Number(recommendation.rowSpacing) > 0 && (
-                   <div className="flex justify-between">
-                     <span className="text-gray-400">Row Spacing:</span>
-                     <span className="font-bold text-blue-400">{recommendation.rowSpacing} m</span>
-                   </div>
-                 )}
-                 <div className="flex justify-between">
-                   <span className="text-gray-400">Sub Spacing:</span>
-                   <span className="font-bold text-blue-400">{recommendation.gap} m</span>
-                 </div>
-               </div>
-               
-               <p className="text-xs text-indigo-200/80 leading-relaxed italic bg-black/20 p-2 rounded border border-white/5">
-                 "{explanation}"
-               </p>
-
-               <button onClick={handleApply} className="w-full py-2 mt-2 rounded bg-green-600 hover:bg-green-500 text-white font-bold text-sm shadow transition-all active:scale-95">
-                 ✅ Terapkan ke Project
-               </button>
+          {result && (
+            <div className={`panel p-3 space-y-3 ${resultStale ? 'bg-raised opacity-50' : 'bg-raised'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold">Usulan susunan</h3>
+                {resultStale && (
+                  <span className="chip chip-warn" title="Target sudah berubah — tekan Hitung ulang sebelum menerapkan">
+                    Target berubah
+                  </span>
+                )}
+              </div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                {[
+                  ['Tipe setup', String(result.updates.setupType)],
+                  ['Kolom × baris × stack', `${result.updates.count} × ${result.updates.rows} × ${result.updates.stack}`],
+                  ['Jarak pusat kolom', `${result.updates.centralGap} m`],
+                  ...(Number(result.updates.rowSpacing) > 0 ? [['Jarak antar baris', `${result.updates.rowSpacing} m`]] : []),
+                  ...(Number(result.updates.theta) > 0 ? [['Sudut busur', `${result.updates.theta}°`]] : []),
+                  ...(result.updates.cardioid ? [['Delay rear', `${result.updates.cardioidDelay} ms`]] : []),
+                ].map(([label, value]) => (
+                  <div key={label} className="stat-row">
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <ul className="space-y-1.5">
+                {result.notes.map((note, i) => (
+                  <li key={i} className="section-note leading-relaxed">
+                    • {note}
+                  </li>
+                ))}
+              </ul>
+              <button className="btn btn-primary w-full" onClick={apply} disabled={resultStale}>
+                {resultStale ? 'Hitung ulang dulu sebelum menerapkan' : 'Terapkan ke project'}
+              </button>
             </div>
           )}
         </div>
       </div>
     </div>
   );
-};
+}

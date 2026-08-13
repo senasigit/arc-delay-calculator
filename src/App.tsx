@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Visualizer } from './components/Visualizer';
 import { DataTable } from './components/DataTable';
@@ -6,56 +6,48 @@ import { ProjectModal } from './components/ProjectModal';
 import { AreaEditor } from './components/AreaEditor';
 import { AudioUtilities } from './components/AudioUtilities';
 import { AutoConfigModal } from './components/AutoConfigModal';
-import type { SubwooferSettings, ReportInfo, ProjectData, VenueArea } from './types';
+import { AboutModal } from './components/AboutModal';
+import { AreaOnboarding } from './components/AreaOnboarding';
+import { PrintReport } from './components/PrintReport';
+import { PrintPreviewModal } from './components/PrintPreviewModal';
+import { useTheme, type ThemeMode } from './theme';
+import { fetchLocalWeather, hasGeolocationPermission } from './weather';
+import { calculateSpeedOfSound, sanitizeSettings } from './utils';
+import type { SubwooferSettings, ReportInfo, ProjectData, VenueArea, SubwooferPreset } from './types';
+import { DEFAULT_SETTINGS, normalizeSettings } from './types';
 import { calculateArcDelay } from './utils';
+import { generateAllReportHeatmaps, type ReportHeatmapImage } from './reportHeatmap';
+import { generateFrontViewImage } from './reportFrontView';
 import { db } from './firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
+
+type Tab = 'setup' | 'map' | 'dsp' | 'tools';
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'setup', label: 'Setup' },
+  { id: 'map', label: 'Peta' },
+  { id: 'dsp', label: 'DSP' },
+  { id: 'tools', label: 'Tools' },
+];
+
+type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 function App() {
-  const [settings, setSettings] = useState<SubwooferSettings>({
-    setupType: 'Curved Array',
-    stageWidth: '',
-    count: '',
-    preset: 'Custom',
-    orientation: 'Landscape',
-    arrayFacing: 'Right',
-    width: '',
-    height: '',
-    depth: '',
-    stack: '',
-    gap: 0.5,
-    rowSpacing: '',
-    rowGap: '',
-    centralGap: 1.5,
-    theta: '',
-    speedOfSound: '',
-    temperature: '',
-    humidity: 50,
-    frequency: 63,
-    targetFrequency: 63,
-    bandwidth: '1/3 Octave',
-    resolution: 'Medium',
-    showHeatmap: false,
-    cardioid: false,
-    cardioidDelay: 4,
-    invertRearPolarity: true,
-    endFireDelayStep: '',
-    cardioidReversedBoxes: [],
-    cardioidSpacers: false,
-    cardioidSpacerSize: 0.15,
-    rows: '',
-  });
-
+  const [settings, setSettings] = useState<SubwooferSettings>(DEFAULT_SETTINGS);
   const [reportInfo, setReportInfo] = useState<ReportInfo>({
     project: '',
     venue: '',
     engineer: '',
-    date: new Date().toISOString().split('T')[0]
+    date: new Date().toISOString().split('T')[0],
   });
 
   const [mutedPositions, setMutedPositions] = useState<Set<number>>(new Set());
   const [disabledCardioidPositions, setDisabledCardioidPositions] = useState<Set<number>>(new Set());
-  const [activeTab, setActiveTab] = useState<'setup' | 'map' | 'dsp' | 'utility'>('setup');
+  // Override per BOX (bukan per posisi) dari tabel DSP — kunci "positionId:stackIndex".
+  const [invertedBoxes, setInvertedBoxes] = useState<Set<string>>(new Set());
+  const [disabledCardioidBoxes, setDisabledCardioidBoxes] = useState<Set<string>>(new Set());
+  const [mutedBoxes, setMutedBoxes] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<Tab>('setup');
   const [activeProject, setActiveProject] = useState<ProjectData | null>(null);
   const [areas, setAreas] = useState<VenueArea[]>([]);
   const [activeAreaId, setActiveAreaId] = useState<string | null>(null);
@@ -64,242 +56,476 @@ function App() {
   const [showAutoConfig, setShowAutoConfig] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [showAbout, setShowAbout] = useState(false);
+  const [showAreaOnboarding, setShowAreaOnboarding] = useState(false);
+  const [printHeatmaps, setPrintHeatmaps] = useState<ReportHeatmapImage[] | null>(null);
+  const [printFrontView, setPrintFrontView] = useState<string | null>(null);
+  const [preparingReport, setPreparingReport] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Preset box tersimpan di collection Firestore terpisah dari project — dibaca
+  // di sini juga (bukan cuma di Sidebar) supaya laporan PDF bisa menampilkan
+  // NAMA preset yang dipilih, bukan sekadar ID dokumennya (settings.preset).
+  const [presets, setPresets] = useState<SubwooferPreset[]>([]);
+  const { mode: themeMode, resolved: theme, setMode: setThemeMode } = useTheme();
 
-  // Auto-save effect
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+  const skipFirstSaveRef = useRef(true);
+
+  // Auto-save ke Firestore, di-debounce agar tidak menulis tiap ketukan tombol.
   useEffect(() => {
     if (!activeProject) return;
-    
-    // Clear previous timeout
+    if (skipFirstSaveRef.current) {
+      skipFirstSaveRef.current = false;
+      return;
+    }
+
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    
-    // Debounce save for 2 seconds
+    setSaveState('saving');
+
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        const docRef = doc(db, 'projects', activeProject.id);
-        await updateDoc(docRef, {
+        await updateDoc(doc(db, 'projects', activeProject.id), {
           settings,
           reportInfo,
           areas,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
         });
-        console.log("Project auto-saved.");
+        setSaveState('saved');
       } catch (e) {
-        console.error("Auto-save failed", e);
+        console.error('Auto-save gagal', e);
+        setSaveState('error');
       }
-    }, 2000);
-    
+    }, 1500);
+
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, [settings, reportInfo, areas, activeProject]);
 
+  // Suhu awal diambil dari cuaca setempat, tetapi HANYA jika izin lokasi sudah
+  // pernah diberikan — supaya membuka aplikasi tidak langsung memunculkan
+  // dialog izin. Tombol manual di panel Heatmap tetap tersedia.
+  const weatherTriedRef = useRef(false);
+  useEffect(() => {
+    if (weatherTriedRef.current) return;
+    weatherTriedRef.current = true;
+
+    (async () => {
+      if (!(await hasGeolocationPermission())) return;
+      try {
+        const reading = await fetchLocalWeather();
+        setSettings((prev) => {
+          // Jangan timpa nilai yang sudah diisi manual pada project ini.
+          if (prev.temperature !== '') return prev;
+          return {
+            ...prev,
+            temperature: reading.temperature,
+            humidity: reading.humidity,
+            speedOfSound: Number(calculateSpeedOfSound(reading.temperature, reading.humidity).toFixed(1)),
+          };
+        });
+      } catch {
+        /* cuaca opsional — abaikan kegagalan */
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, 'presets'),
+      (snapshot) => setPresets(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as SubwooferPreset)),
+      (err) => console.error('Gagal memuat preset', err)
+    );
+    return () => unsubscribe();
+  }, []);
+
   const handleSelectProject = (project: ProjectData) => {
-    setSettings(project.settings);
-    setReportInfo(project.reportInfo);
-    setAreas(project.areas || []);
+    // Project lama bisa punya skema berbeda — selalu gabungkan dengan default.
+    const normalized = normalizeSettings(project.settings);
+    // Project yang tersimpan sebelum MIN_TARGET_FREQ_HZ ditambahkan bisa saja
+    // masih menyimpan gap/central gap yang meledak dari bug lama — perbaiki
+    // begitu dimuat, jangan tunggu pengguna menemukan sendiri lewat peta yang
+    // tiba-tiba menampilkan skala kilometer.
+    const { settings: sanitized, fixed } = sanitizeSettings(normalized);
+    setSettings(sanitized);
+    if (fixed.length > 0) {
+      window.alert(
+        `Project ini menyimpan ${fixed.join(', ')} dengan nilai yang tidak wajar (kemungkinan dari sesi lama) ` +
+          'dan sudah dikembalikan ke nilai default. Silakan atur ulang jarak sesuai kebutuhan Anda.'
+      );
+    }
+    const loadedAreas = project.areas ?? [];
+    setReportInfo(project.reportInfo ?? { project: '', venue: '', engineer: '', date: '' });
+    setAreas(loadedAreas);
+    setMutedPositions(new Set());
+    setDisabledCardioidPositions(new Set());
+    setInvertedBoxes(new Set());
+    setDisabledCardioidBoxes(new Set());
+    setMutedBoxes(new Set());
+    skipFirstSaveRef.current = true;
+    setSaveState('idle');
     setActiveProject(project);
+    // Project baru (atau project lama tanpa area sama sekali) — tawarkan
+    // menambahkan area venue dulu sebelum lanjut mengatur array.
+    if (loadedAreas.length === 0) setShowAreaOnboarding(true);
   };
 
-  const handleToggleMute = (positionId: number) => {
-    setMutedPositions(prev => {
-      const next = new Set(prev);
-      if (next.has(positionId)) next.delete(positionId);
-      else next.add(positionId);
-      return next;
+  const toggleIn =
+    <T,>(setter: Dispatch<SetStateAction<Set<T>>>) =>
+    (id: T) => {
+      setter((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    };
+
+  const { groups, stats } = useMemo(
+    () =>
+      calculateArcDelay(
+        settings,
+        mutedPositions,
+        disabledCardioidPositions,
+        invertedBoxes,
+        disabledCardioidBoxes,
+        mutedBoxes
+      ),
+    [settings, mutedPositions, disabledCardioidPositions, invertedBoxes, disabledCardioidBoxes, mutedBoxes]
+  );
+
+  // Membuat 10 peta SPL statis (per frekuensi) itu berat — dijalankan hanya
+  // saat tombol Export PDF ditekan, bukan tiap render. requestAnimationFrame
+  // memberi satu frame agar label tombol "Menyiapkan…" sempat tergambar
+  // sebelum kerja sinkron yang berat dimulai. Setelah siap, tampilkan preview
+  // dulu — jangan langsung window.print() — supaya pengguna bisa memeriksa
+  // isinya dan membatalkan kalau ada yang belum sesuai.
+  const handleExportPdf = () => {
+    setPreparingReport(true);
+    requestAnimationFrame(() => {
+      const images = generateAllReportHeatmaps(settings, groups, areas);
+      setPrintHeatmaps(images);
+      setPrintFrontView(generateFrontViewImage(settings, groups));
+      setPreparingReport(false);
+      setPreviewOpen(true);
     });
   };
 
-  const handleToggleCardioid = (positionId: number) => {
-    setDisabledCardioidPositions(prev => {
-      const next = new Set(prev);
-      if (next.has(positionId)) next.delete(positionId);
-      else next.add(positionId);
-      return next;
-    });
+  const openTab = (tab: Tab) => {
+    setActiveTab(tab);
+    setShowUtility(tab === 'tools');
   };
 
-  const { groups, stats } = useMemo(() => {
-    return calculateArcDelay(settings, mutedPositions, disabledCardioidPositions);
-  }, [settings, mutedPositions, disabledCardioidPositions]);
+  const saveLabel: Record<SaveState, string> = {
+    idle: 'Tersinkron',
+    saving: 'Menyimpan…',
+    saved: 'Tersimpan',
+    error: 'Gagal simpan',
+  };
 
   return (
     <>
       {!activeProject && (
-        <ProjectModal 
-          onSelectProject={handleSelectProject} 
-          defaultSettings={settings} 
-          defaultReportInfo={reportInfo} 
+        <ProjectModal
+          onSelectProject={handleSelectProject}
+          defaultSettings={settings}
+          defaultReportInfo={reportInfo}
+        />
+      )}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+      {showAreaOnboarding && activeProject && (
+        <AreaOnboarding
+          areas={areas}
+          onChange={setAreas}
+          onClose={() => setShowAreaOnboarding(false)}
+          onOpenFullEditor={() => {
+            setActiveTab('map');
+            setShowAreaEditor(true);
+          }}
         />
       )}
       {showAutoConfig && (
-        <AutoConfigModal 
+        <AutoConfigModal
           currentSettings={settings}
           areas={areas}
           onClose={() => setShowAutoConfig(false)}
-          onApply={(updates) => setSettings(prev => ({ ...prev, ...updates }))}
+          onApply={(updates) => setSettings((prev) => ({ ...prev, ...updates }))}
         />
       )}
-      <div className="flex w-screen h-screen overflow-hidden text-yellow-400 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-zinc-950 via-black to-zinc-900 print:block print:h-auto print:bg-white print:text-black flex-col lg:flex-row">
-      
-      {/* Mobile Top Nav / Tabs */}
-      <div className="lg:hidden flex bg-slate-900/50 backdrop-blur-md border-b border-slate-700 p-2 space-x-1 print:hidden z-20 shadow-md overflow-x-auto">
-         <button onClick={() => {setActiveTab('setup'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'setup' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>⚙️ Setup</button>
-         <button onClick={() => {setActiveTab('map'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'map' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🗺️ Map</button>
-         <button onClick={() => {setActiveTab('dsp'); setShowUtility(false);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'dsp' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🎛️ DSP</button>
-         <button onClick={() => {setActiveTab('utility'); setShowUtility(true);}} className={`flex-1 py-2 px-2 whitespace-nowrap text-xs font-bold rounded transition-colors ${activeTab === 'utility' ? 'bg-blue-600 text-white' : 'bg-white/5 text-yellow-400'}`}>🛠️ Utility</button>
-      </div>
 
-      {/* Sidebar Kiri */}
-      <div className={`${activeTab === 'setup' ? 'flex-1 min-h-0' : 'hidden print:block'} lg:flex-none lg:block ${isLeftSidebarOpen ? 'w-full lg:w-80 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 transition-all duration-300 print:hidden relative`}>
-        <div className="w-full lg:w-80 h-full">
-          <Sidebar 
-            settings={settings} 
-            onChange={setSettings} 
-            stats={stats} 
-            reportInfo={reportInfo}
-            onReportInfoChange={setReportInfo}
-            activeProject={activeProject}
-            onCloseProject={() => setActiveProject(null)}
-            onOpenAutoConfig={() => setShowAutoConfig(true)}
-          />
-        </div>
-      </div>
-      
-      {/* Area Utama */}
-      <div className={`${activeTab === 'setup' ? 'hidden print:flex' : 'flex'} lg:flex flex-1 flex-col print:block print:w-full h-full overflow-hidden relative`}>
-        
-        {/* HEADER LAPORAN (HANYA TAMPIL SAAT DIPRINT ATAU DILIHAT DI PDF) */}
-        <div className="hidden print:block mb-6 pt-4 border-b-2 border-gray-800 pb-4">
-           <h1 className="text-3xl font-extrabold text-black uppercase mb-1">{reportInfo.project || 'SIMULASI SUBWOOFER ARRAY'}</h1>
-           <div className="grid grid-cols-2 gap-4 text-sm mt-4 text-gray-800">
-             <div>
-               <p><span className="font-bold w-32 inline-block">Venue</span>: {reportInfo.venue || '-'}</p>
-               <p><span className="font-bold w-32 inline-block">Tanggal</span>: {reportInfo.date}</p>
-               <p><span className="font-bold w-32 inline-block">Audio Engineer</span>: {reportInfo.engineer || '-'}</p>
-             </div>
-             <div>
-               <p><span className="font-bold w-32 inline-block">Tipe Setup</span>: {settings.setupType}</p>
-               <p><span className="font-bold w-32 inline-block">Sub Preset</span>: {settings.preset}</p>
-               <p><span className="font-bold w-32 inline-block">Dimensi & Posisi</span>: {settings.width}m x {settings.height}m x {settings.depth}m ({settings.orientation})</p>
-             </div>
-           </div>
-           
-           <div className="grid grid-cols-2 gap-4 text-sm mt-2 text-gray-800">
-             <div>
-               <p><span className="font-bold w-32 inline-block">Stack (Atas)</span>: {settings.stack}</p>
-               <p><span className="font-bold w-32 inline-block">Rows (Belakang)</span>: {settings.rows}</p>
-               <p><span className="font-bold w-32 inline-block">Sub Gap / Central</span>: {settings.gap}m / {settings.centralGap}m</p>
-               <p><span className="font-bold w-32 inline-block">Suhu / Lembap</span>: {settings.temperature !== '' ? settings.temperature : '-'}°C / {settings.humidity !== '' ? settings.humidity : '-'}%</p>
-             </div>
-             <div>
-               <p><span className="font-bold w-32 inline-block">Cardioid / Gradient</span>: {settings.cardioid ? 'YES' : 'NO'}</p>
-               <p><span className="font-bold w-32 inline-block">Sudut Cakupan</span>: {settings.theta}°</p>
-               <p><span className="font-bold w-32 inline-block">Heatmap Freq</span>: {settings.frequency}Hz ({settings.bandwidth})</p>
-               <p><span className="font-bold w-32 inline-block">Kecepatan Suara</span>: {settings.speedOfSound !== '' ? settings.speedOfSound : '-'} m/s</p>
-             </div>
-           </div>
-        </div>
-        
-        {/* Area Map & Tabel */}
-        <div className="flex-1 flex flex-col lg:flex-row print:block print:w-full h-full overflow-hidden">
-          {/* Tengah: Visualizer Dinamis */}
-          <div className={`${activeTab === 'map' ? 'flex-1 min-h-0' : 'hidden print:flex'} lg:flex flex-1 h-full overflow-hidden relative print:flex print:h-[500px] print:w-full print:mb-8 print:border print:border-gray-300 rounded-lg m-2 shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-white/10`}>
-            
-            {/* Toggle Left Sidebar Button */}
-            <button 
-              onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-              className="hidden lg:flex absolute top-1/2 left-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-r-md border border-l-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
-              title={isLeftSidebarOpen ? "Hide Setup" : "Show Setup"}
-            >
-              {isLeftSidebarOpen ? '◀' : '▶'}
-            </button>
+      <div className="app-shell flex flex-col bg-canvas text-ink overflow-hidden">
+        {/* ---------------- Top bar ---------------- */}
+        <header className="safe-top flex items-center gap-2 px-3 py-2 border-b border-line bg-panel flex-none print-hide">
+          <button
+            className="btn btn-ghost px-1.5 gap-2 flex-none"
+            onClick={() => setShowAbout(true)}
+            title="Tentang aplikasi & pengembang"
+          >
+            <img src="/logo.png" alt="" className="w-6 h-6 object-contain" />
+            <span className="text-sm font-semibold tracking-tight">Sub Forge</span>
+          </button>
+          <div className="min-w-0 flex items-baseline gap-2">
+            {activeProject && (
+              <span className="text-xs text-ink-2 truncate hidden sm:inline">/ {activeProject.name}</span>
+            )}
+          </div>
 
-            {/* Toggle Right Sidebar Button */}
-            <button 
-              onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-              className="hidden lg:flex absolute top-1/2 right-0 transform -translate-y-1/2 bg-slate-800/80 hover:bg-slate-700 text-white p-1.5 rounded-l-md border border-r-0 border-white/20 shadow-lg z-20 transition-colors backdrop-blur-md"
-              title={isRightSidebarOpen ? "Hide DSP" : "Show DSP"}
-            >
-              {isRightSidebarOpen ? '▶' : '◀'}
-            </button>
-
-            <Visualizer 
-              settings={settings} 
-              groups={groups} 
-              areas={areas}
-              activeAreaId={activeAreaId}
-              onSelectArea={setActiveAreaId}
-              onUpdateArea={(id, updates) => {
-                 setAreas(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
-              }}
-              onChangeSettings={setSettings}
+          <span
+            className={`chip ml-1 hidden sm:inline-flex ${saveState === 'error' ? 'chip-danger' : ''}`}
+            title="Status sinkronisasi cloud"
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                saveState === 'error' ? 'bg-danger' : saveState === 'saving' ? 'bg-warn' : 'bg-good'
+              }`}
             />
-            
-            {!showAreaEditor && !showUtility && (
-              <div className="absolute top-4 right-4 flex gap-2 z-20 print:hidden">
-                <button 
-                  onClick={() => setShowUtility(true)}
-                  className="bg-zinc-800 hover:bg-zinc-700 border border-gray-600 text-white px-3 py-2 rounded-lg shadow-lg text-xs font-bold transition-all"
-                >
-                  🛠️ Utility
-                </button>
-                <button 
-                  onClick={() => setShowAreaEditor(true)}
-                  className="bg-gradient-to-r from-yellow-300 to-amber-500 hover:from-purple-500 hover:to-indigo-500 border border-yellow-500/50 text-white px-4 py-2 rounded-lg shadow-[0_0_15px_rgba(168,85,247,0.5)] text-xs font-bold transition-all"
-                >
-                  🗺️ Area Manager
-                </button>
-              </div>
-            )}
-            
-            {showUtility && (
-              <div className="absolute inset-0 z-30 flex flex-col bg-zinc-950">
-                <div className="absolute top-4 right-4 z-40 hidden lg:block">
-                  <button onClick={() => setShowUtility(false)} className="bg-red-600/80 hover:bg-red-500 text-white px-3 py-1.5 rounded text-sm font-bold shadow-lg backdrop-blur">
-                    ✕ Close Utilities
-                  </button>
-                </div>
-                <AudioUtilities settings={settings} />
-              </div>
-            )}
+            {saveLabel[saveState]}
+          </span>
 
-            {showAreaEditor && (
-              <AreaEditor 
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              className="btn hidden lg:inline-flex"
+              onClick={() => setShowUtility(true)}
+              title="Kalkulator audio pendukung"
+            >
+              Tools
+            </button>
+            <button className="btn" onClick={() => setShowAutoConfig(true)} title="Asisten konfigurasi otomatis">
+              Asisten
+            </button>
+            <button
+              className="btn hidden sm:inline-flex"
+              onClick={handleExportPdf}
+              disabled={preparingReport}
+              title="Buat laporan PDF lengkap (konfigurasi, DSP, dan peta SPL tiap frekuensi) — tampilkan preview dulu sebelum dicetak"
+            >
+              {preparingReport ? 'Menyiapkan…' : 'Export PDF'}
+            </button>
+            <button className="btn" onClick={() => setActiveProject(null)} title="Buka project lain">
+              Project
+            </button>
+            <div className="hidden lg:flex items-center border border-line rounded-md overflow-hidden">
+              <button
+                onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
+                className={`btn rounded-none border-0 border-r border-line px-2 ${isLeftSidebarOpen ? 'bg-hover' : ''}`}
+                title={isLeftSidebarOpen ? 'Sembunyikan panel setup' : 'Tampilkan panel setup'}
+                aria-pressed={isLeftSidebarOpen}
+              >
+                ◧
+              </button>
+              <button
+                onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+                className={`btn rounded-none border-0 px-2 ${isRightSidebarOpen ? 'bg-hover' : ''}`}
+                title={isRightSidebarOpen ? 'Sembunyikan tabel DSP' : 'Tampilkan tabel DSP'}
+                aria-pressed={isRightSidebarOpen}
+              >
+                ◨
+              </button>
+            </div>
+            <select
+              className="select w-auto min-h-0 py-1.5 text-[11px] pl-2"
+              value={themeMode}
+              onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
+              aria-label="Tema tampilan"
+              title="Tema tampilan"
+            >
+              <option value="system">Ikuti sistem</option>
+              <option value="light">Terang</option>
+              <option value="dark">Gelap</option>
+            </select>
+          </div>
+        </header>
+
+        <div className="flex-1 flex flex-col lg:flex-row min-h-0 print-hide">
+          {/* ---------------- Panel setup (kiri) ---------------- */}
+          {/* Disembunyikan dengan MELEPAS elemen dari DOM (bukan hanya toggle
+              class display), supaya browser terpaksa menghitung ulang layout
+              dari nol setiap kali dimunculkan lagi. Toggle class display saja
+              (tanpa animasi sekalipun) ternyata masih gagal mengembang lagi di
+              Safari — indikasi bug reflow WebKit pada flex item bertingkat,
+              bukan soal animasi. Unmount/remount tidak bergantung pada mesin
+              reflow browser sama sekali. */}
+          {(isLeftSidebarOpen || activeTab === 'setup') && (
+            <aside
+              className={`${activeTab === 'setup' ? 'flex' : 'hidden'} ${
+                isLeftSidebarOpen ? 'lg:flex' : 'lg:hidden'
+              } flex-none w-full lg:w-80 min-h-0 print-hide`}
+            >
+              <div className="w-full min-h-0 flex">
+                <Sidebar
+                  settings={settings}
+                  onChange={setSettings}
+                  stats={stats}
+                  reportInfo={reportInfo}
+                  onReportInfoChange={setReportInfo}
+                  areas={areas}
+                  groups={groups}
+                />
+              </div>
+            </aside>
+          )}
+
+          {/* ---------------- Area utama ---------------- */}
+          {/* min-w-0 WAJIB: tanpa ini, default CSS flexbox membuat <main>
+              menolak menyusut lebih sempit dari konten intrinsiknya (kanvas
+              peta) walau flex-1 mengizinkan shrink. Saat lebar total
+              [sidebar kiri + main + sidebar kanan] melebihi lebar jendela,
+              baris flex meluap dan panel kanan (item terakhir) terdorong ke
+              luar area yang terlihat — bukan hilang, hanya ter-clip oleh
+              overflow-hidden pada .app-shell. Inilah sebabnya menyembunyikan
+              panel kiri "memunculkan" panel kanan lagi: ruang jadi cukup. */}
+          {/* Laporan cetak sekarang komponen tersendiri (PrintReport, dirender
+              di luar layout interaktif ini) — <main> di layar TIDAK ikut
+              tercetak lagi (print-hide, bukan print:block seperti dulu),
+              supaya hasil Export PDF tidak lagi sekadar "apa yang kebetulan
+              tampil di layar" tapi laporan terstruktur yang sama setiap kali. */}
+          <main className={`${activeTab === 'map' ? 'flex' : 'hidden'} lg:flex flex-1 flex-col min-h-0 min-w-0 print-hide`}>
+            {/* Peta */}
+            <div className="flex-1 relative min-h-0 flex m-0 lg:m-2 lg:rounded-lg lg:border border-line overflow-hidden">
+              <Visualizer
+                settings={settings}
+                groups={groups}
                 areas={areas}
-                onChange={setAreas}
                 activeAreaId={activeAreaId}
                 onSelectArea={setActiveAreaId}
-                onClose={() => setShowAreaEditor(false)}
+                onUpdateArea={(id, updates) =>
+                  setAreas((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)))
+                }
+                onChangeSettings={setSettings}
+                onOpenAreaEditor={() => setShowAreaEditor(true)}
+                areaEditorOpen={showAreaEditor}
+                theme={theme}
               />
-            )}
-          </div>
 
-          {/* Kanan: Tabel Data */}
-          <div className={`${activeTab === 'dsp' ? 'flex-1 min-h-0' : 'hidden print:block'} lg:flex-none lg:block ${isRightSidebarOpen ? 'w-full lg:w-96 h-full' : 'w-0 h-full overflow-hidden'} flex-shrink-0 border-l border-white/10 bg-slate-900/40 backdrop-blur-md print:w-full print:border-none transition-all duration-300 relative`}>
-            <div className="w-full lg:w-96 h-full overflow-y-auto">
-              <DataTable 
-                groups={groups} 
-                cardioidEnabled={settings.cardioid}
-                onToggleMute={handleToggleMute}
-                onToggleCardioid={handleToggleCardioid}
-                isFrontMuted={settings.muteFront}
-                isRearMuted={settings.muteRear}
-                onToggleGlobalMute={(type, mute) => {
-                  if (type === 'front') {
-                     setSettings(prev => ({...prev, muteFront: mute}));
-                  } else {
-                     setSettings(prev => ({...prev, muteRear: mute}));
-                  }
-                }}
-              />
+              {showAreaEditor && (
+                <AreaEditor
+                  areas={areas}
+                  onChange={setAreas}
+                  activeAreaId={activeAreaId}
+                  onSelectArea={setActiveAreaId}
+                  onClose={() => setShowAreaEditor(false)}
+                />
+              )}
             </div>
-          </div>
+          </main>
+
+          {/* Tabel DSP — dipindah keluar dari <main> agar sejajar (satu level
+              flex) dengan panel setup kiri, bukan tersarang dua lapis di
+              dalam <main> > row. Nesting yang lebih dalam adalah satu-satunya
+              perbedaan struktural tersisa antara panel kiri (sudah terbukti
+              berfungsi di Safari setelah di-unmount) dan panel kanan (masih
+              gagal) — jadi diratakan supaya keduanya benar-benar simetris. */}
+          {isRightSidebarOpen && (
+            <aside className="hidden lg:flex flex-none lg:w-96 border-l border-line bg-panel min-h-0 print-hide">
+              <div className="w-full min-h-0 flex">
+                <DataTable
+                  groups={groups}
+                  settings={settings}
+                  onToggleMute={toggleIn(setMutedPositions)}
+                  onToggleCardioid={toggleIn(setDisabledCardioidPositions)}
+                  invertedBoxes={invertedBoxes}
+                  onToggleBoxInvert={toggleIn(setInvertedBoxes)}
+                  disabledCardioidBoxes={disabledCardioidBoxes}
+                  onToggleBoxCardioid={toggleIn(setDisabledCardioidBoxes)}
+                  mutedBoxes={mutedBoxes}
+                  onToggleBoxMute={toggleIn(setMutedBoxes)}
+                  onToggleGlobalMute={(type, mute) =>
+                    setSettings((prev) => ({ ...prev, [type === 'front' ? 'muteFront' : 'muteRear']: mute }))
+                  }
+                />
+              </div>
+            </aside>
+          )}
+
+          {/* Tabel DSP versi mobile */}
+          <section className={`${activeTab === 'dsp' ? 'flex' : 'hidden'} lg:hidden flex-1 min-h-0 print-hide`}>
+            <DataTable
+              groups={groups}
+              settings={settings}
+              onToggleMute={toggleIn(setMutedPositions)}
+              onToggleCardioid={toggleIn(setDisabledCardioidPositions)}
+              invertedBoxes={invertedBoxes}
+              onToggleBoxInvert={toggleIn(setInvertedBoxes)}
+              disabledCardioidBoxes={disabledCardioidBoxes}
+              onToggleBoxCardioid={toggleIn(setDisabledCardioidBoxes)}
+              mutedBoxes={mutedBoxes}
+              onToggleBoxMute={toggleIn(setMutedBoxes)}
+              onToggleGlobalMute={(type, mute) =>
+                setSettings((prev) => ({ ...prev, [type === 'front' ? 'muteFront' : 'muteRear']: mute }))
+              }
+            />
+          </section>
+
+          {/* Utilities */}
+          {showUtility && (
+            <section className="fixed inset-0 z-40 flex flex-col bg-canvas pb-[52px] lg:pb-0 print-hide">
+              <div className="safe-top flex items-center justify-between px-3 py-2 border-b border-line bg-panel flex-none">
+                <h2 className="text-sm font-semibold">Audio Utilities</h2>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setShowUtility(false);
+                    if (activeTab === 'tools') setActiveTab('map');
+                  }}
+                >
+                  Tutup
+                </button>
+              </div>
+              <AudioUtilities settings={settings} />
+            </section>
+          )}
         </div>
+
+        {/* ---------------- Tab bar mobile (bawah, ala iOS) ---------------- */}
+        {/* z-50 agar tetap dapat ditekan di atas overlay Tools */}
+        <nav className="safe-bottom lg:hidden flex-none flex border-t border-line bg-panel relative z-50 print-hide">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => openTab(tab.id)}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
+              className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${
+                activeTab === tab.id
+                  ? 'text-accent-hi border-t-2 border-accent -mt-px'
+                  : 'text-ink-3 border-t-2 border-transparent -mt-px'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </div>
-      
-    </div>
+
+      <PrintReport
+        settings={settings}
+        stats={stats}
+        groups={groups}
+        areas={areas}
+        reportInfo={reportInfo}
+        heatmapImages={printHeatmaps}
+        frontViewImage={printFrontView}
+        presets={presets}
+      />
+
+      {previewOpen && (
+        <PrintPreviewModal
+          settings={settings}
+          stats={stats}
+          groups={groups}
+          areas={areas}
+          reportInfo={reportInfo}
+          heatmapImages={printHeatmaps}
+          frontViewImage={printFrontView}
+          presets={presets}
+          onClose={() => setPreviewOpen(false)}
+          // Delay kecil sebelum window.print() — jaga-jaga terhadap browser
+          // yang mengambil snapshot cetak sebelum frame terakhir sungguh
+          // ter-paint (dites benar di Chrome/headless; sengaja tetap dijaga
+          // untuk browser lain yang mungkin lebih ketat soal timing ini).
+          onPrint={() => setTimeout(() => window.print(), 80)}
+        />
+      )}
     </>
   );
 }

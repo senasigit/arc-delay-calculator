@@ -12,146 +12,144 @@ interface ProjectModalProps {
 export function ProjectModal({ onSelectProject, defaultSettings, defaultReportInfo }: ProjectModalProps) {
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    const fetchProjects = async () => {
+    (async () => {
       try {
-        const q = query(collection(db, 'projects'), orderBy('updatedAt', 'desc'));
-        const querySnapshot = await getDocs(q);
-        const projectsData: ProjectData[] = [];
-        querySnapshot.forEach((doc) => {
-          projectsData.push({ id: doc.id, ...doc.data() } as ProjectData);
-        });
-        setProjects(projectsData);
+        const snapshot = await getDocs(query(collection(db, 'projects'), orderBy('updatedAt', 'desc')));
+        setProjects(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as ProjectData));
       } catch (e) {
-        console.error("Error loading projects:", e);
+        console.error('Gagal memuat project:', e);
+        setLoadError('Tidak bisa terhubung ke cloud. Periksa koneksi internet.');
       } finally {
         setLoading(false);
       }
-    };
-    fetchProjects();
+    })();
   }, []);
 
   const handleCreateNew = async () => {
-    if (!newProjectName.trim()) return;
+    if (!newProjectName.trim() || creating) return;
     setCreating(true);
-    
     const newProject = {
       name: newProjectName.trim(),
       settings: defaultSettings,
       reportInfo: defaultReportInfo,
-      updatedAt: Date.now()
+      areas: [],
+      updatedAt: Date.now(),
     };
-    
     try {
       const docRef = await addDoc(collection(db, 'projects'), newProject);
       onSelectProject({ id: docRef.id, ...newProject });
     } catch (e) {
-      console.error("Error creating project:", e);
-      alert("Gagal membuat project. Periksa koneksi.");
+      console.error('Gagal membuat project:', e);
+      alert('Gagal membuat project. Periksa koneksi internet.');
       setCreating(false);
     }
   };
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!window.confirm("Hapus project ini secara permanen?")) return;
+    if (!window.confirm('Hapus project ini secara permanen?')) return;
     try {
       await deleteDoc(doc(db, 'projects', id));
-      setProjects(projects.filter(p => p.id !== id));
-    } catch(err) {
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
       console.error(err);
-      alert("Gagal menghapus project.");
+      alert('Gagal menghapus project.');
     }
   };
 
-  const handleEditName = async (e: React.MouseEvent, proj: ProjectData) => {
+  const handleRename = async (e: React.MouseEvent, proj: ProjectData) => {
     e.stopPropagation();
-    const newName = window.prompt("Masukkan nama baru untuk project:", proj.name);
-    if (!newName || newName.trim() === '' || newName === proj.name) return;
-    
+    const newName = window.prompt('Nama baru project:', proj.name);
+    if (!newName?.trim() || newName === proj.name) return;
     try {
       await updateDoc(doc(db, 'projects', proj.id), { name: newName.trim() });
-      setProjects(projects.map(p => p.id === proj.id ? { ...p, name: newName.trim() } : p));
-    } catch(err) {
+      setProjects((prev) => prev.map((p) => (p.id === proj.id ? { ...p, name: newName.trim() } : p)));
+    } catch (err) {
       console.error(err);
-      alert("Gagal mengubah nama project.");
+      alert('Gagal mengubah nama project.');
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-      <div className="bg-[#0a0c10] border border-dark-border rounded-lg shadow-2xl w-full max-w-md p-6">
-        <div className="flex items-center mb-2 justify-center">
-          <img src="/logo.png" alt="Sub Forge Logo" className="w-10 h-10 mr-3 object-contain" />
-          <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-amber-500">Sub Forge</h2>
-        </div>
-        <p className="text-sm text-yellow-400 mb-6">Pilih project yang sudah ada atau buat baru.</p>
-        
-        <div className="mb-6">
-          <h3 className="text-sm font-semibold text-yellow-400 mb-3">Project Sebelumnya</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+      <div className="panel w-full max-w-md max-h-[85dvh] flex flex-col shadow-2xl">
+        <header className="flex-none px-5 pt-5 pb-4 border-b border-line">
+          <div className="flex items-center gap-2.5 mb-1">
+            <img src="/logo.png" alt="" className="w-7 h-7 object-contain" />
+            <h1 className="text-lg font-semibold tracking-tight">Sub Forge</h1>
+          </div>
+          <p className="section-note">Kalkulator array &amp; delay subwoofer. Pilih project atau buat baru.</p>
+        </header>
+
+        <div className="flex-1 scroll-y px-5 py-4">
+          <h2 className="field-label">Project tersimpan</h2>
           {loading ? (
-            <p className="text-xs text-gray-500">Memuat...</p>
+            <p className="section-note">Memuat…</p>
+          ) : loadError ? (
+            <p className="text-[11px] text-danger border border-danger/40 bg-danger/10 rounded px-2 py-1.5">
+              {loadError}
+            </p>
           ) : projects.length === 0 ? (
-            <p className="text-xs text-gray-500 italic">Belum ada project tersimpan.</p>
+            <p className="section-note">Belum ada project tersimpan.</p>
           ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+            <ul className="space-y-1.5">
               {projects.map((proj) => (
-                <div
-                  key={proj.id}
-                  className="w-full flex items-center justify-between bg-[#0f1115] hover:bg-[#1a1d24] border border-dark-border rounded p-3 transition-colors cursor-pointer"
-                  onClick={() => onSelectProject(proj)}
-                >
-                  <div>
-                    <p className="font-bold text-accent text-sm">{proj.name}</p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Terakhir diubah: {new Date(proj.updatedAt).toLocaleString('id-ID')}
-                    </p>
+                <li key={proj.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectProject(proj)}
+                    onKeyDown={(e) => e.key === 'Enter' && onSelectProject(proj)}
+                    className="flex items-center justify-between gap-2 bg-raised border border-line hover:border-line-strong rounded px-3 py-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{proj.name}</p>
+                      <p className="text-[11px] text-ink-3">
+                        {proj.updatedAt ? new Date(proj.updatedAt).toLocaleString('id-ID') : '—'}
+                      </p>
+                    </div>
+                    <div className="flex gap-1 flex-none">
+                      <button className="btn px-2 min-h-0 py-1 text-[11px]" onClick={(e) => handleRename(e, proj)}>
+                        Ubah nama
+                      </button>
+                      <button
+                        className="btn btn-danger px-2 min-h-0 py-1 text-[11px]"
+                        onClick={(e) => handleDelete(e, proj.id)}
+                      >
+                        Hapus
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={(e) => handleEditName(e, proj)}
-                      className="text-xs bg-gray-800 hover:bg-gray-700 text-yellow-400 px-2 py-1 rounded border border-gray-600 transition-colors"
-                      title="Edit Nama Project"
-                    >
-                      ✏️ Edit
-                    </button>
-                    <button 
-                      onClick={(e) => handleDelete(e, proj.id)}
-                      className="text-xs bg-red-900/50 hover:bg-red-800 text-red-300 px-2 py-1 rounded border border-red-800 transition-colors"
-                      title="Hapus Project"
-                    >
-                      🗑️ Hapus
-                    </button>
-                  </div>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
-        
-        <div className="border-t border-dark-border pt-4">
-          <h3 className="text-sm font-semibold text-yellow-400 mb-3">Buat Project Baru</h3>
-          <div className="flex space-x-2">
-            <input 
+
+        <footer className="flex-none px-5 py-4 border-t border-line">
+          <label htmlFor="newProject" className="field-label">
+            Buat project baru
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="newProject"
               type="text"
-              placeholder="Nama Project Baru..."
+              placeholder="Nama project"
+              className="input flex-1"
               value={newProjectName}
               onChange={(e) => setNewProjectName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCreateNew()}
-              className="flex-1 bg-[#0f1115] border border-dark-border rounded px-3 py-2 text-white focus:outline-none focus:border-accent transition-colors text-sm"
             />
-            <button 
-              onClick={handleCreateNew}
-              disabled={creating || !newProjectName.trim()}
-              className="bg-accent hover:bg-yellow-500 disabled:opacity-50 text-white font-bold px-4 py-2 rounded text-sm transition-colors"
-            >
-              {creating ? '...' : 'Buat'}
+            <button className="btn btn-primary px-4" onClick={handleCreateNew} disabled={creating || !newProjectName.trim()}>
+              {creating ? '…' : 'Buat'}
             </button>
           </div>
-        </div>
+        </footer>
       </div>
     </div>
   );

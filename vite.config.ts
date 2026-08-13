@@ -9,13 +9,20 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      // Hanya berkas yang benar-benar ada di public/ — entri fiktif membuat
+      // precache manifest gagal diam-diam.
+      includeAssets: ['favicon.ico', 'favicon.svg', 'logo.png'],
+      workbox: {
+        // Cegah file cadangan besar ikut ter-precache ke perangkat.
+        globIgnores: ['**/*.bak'],
+      },
       manifest: {
-        name: 'Sub Forge',
+        name: 'Sub Forge — Subwoofer Array Calculator',
         short_name: 'Sub Forge',
-        description: 'Professional Subwoofer Array & Arc Delay Calculator',
-        theme_color: '#0a0c10',
-        background_color: '#0a0c10',
+        description: 'Kalkulator array & delay subwoofer: arc delay, cardioid, end-fire, dan peta SPL.',
+        lang: 'id',
+        theme_color: '#0e0f11',
+        background_color: '#0e0f11',
         display: 'standalone',
         orientation: 'any',
         icons: [
