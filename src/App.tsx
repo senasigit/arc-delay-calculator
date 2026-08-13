@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { flushSync } from 'react-dom';
 import { Sidebar } from './components/Sidebar';
 import { Visualizer } from './components/Visualizer';
 import { DataTable } from './components/DataTable';
@@ -8,7 +9,7 @@ import { AudioUtilities } from './components/AudioUtilities';
 import { AutoConfigModal } from './components/AutoConfigModal';
 import { AboutModal } from './components/AboutModal';
 import { AreaOnboarding } from './components/AreaOnboarding';
-import { PrintReport } from './components/PrintReport';
+import { PrintReportContent } from './components/PrintReport';
 import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { useTheme, type ThemeMode } from './theme';
 import { fetchLocalWeather, hasGeolocationPermission } from './weather';
@@ -67,7 +68,34 @@ function App() {
   // di sini juga (bukan cuma di Sidebar) supaya laporan PDF bisa menampilkan
   // NAMA preset yang dipilih, bukan sekadar ID dokumennya (settings.preset).
   const [presets, setPresets] = useState<SubwooferPreset[]>([]);
+  // Saat true, seluruh UI interaktif diganti dengan PrintReportContent lewat
+  // conditional render React — BUKAN CSS "hidden print:block" seperti
+  // sebelumnya. Laporan tetap kosong (Page 1 of 1) di Safari walau sudah
+  // di-generate: dugaan kuat ini bug WebKit soal cascade layer Tailwind v4
+  // (@layer + @media print + varian) yang gagal menimpa `hidden`. Event
+  // beforeprint/afterprint murni JS, tidak bergantung sama sekali pada
+  // cascade CSS, jadi kebal terhadap bug spesifik itu — pola yang sama
+  // seperti perbaikan bug sidebar Safari sebelumnya (unmount, bukan toggle
+  // CSS).
+  const [isPrinting, setIsPrinting] = useState(false);
   const { mode: themeMode, resolved: theme, setMode: setThemeMode } = useTheme();
+
+  useEffect(() => {
+    // flushSync WAJIB di sini — React 18+ membatch state update dari event
+    // listener native (termasuk beforeprint), jadi tanpa ini DOM belum tentu
+    // sempat ter-commit sebelum mesin cetak browser mengambil snapshot
+    // halaman. flushSync memaksa React merender & meng-commit SAAT ITU JUGA,
+    // sebelum handler ini selesai — jaminan dari React sendiri, tidak
+    // bergantung pada perilaku CSS/browser tertentu.
+    const onBeforePrint = () => flushSync(() => setIsPrinting(true));
+    const onAfterPrint = () => flushSync(() => setIsPrinting(false));
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
+    };
+  }, []);
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipFirstSaveRef = useRef(true);
@@ -224,6 +252,24 @@ function App() {
     error: 'Gagal simpan',
   };
 
+  if (isPrinting) {
+    // Diganti total dengan konten laporan polos saat sungguh mencetak —
+    // lihat catatan di deklarasi isPrinting soal kenapa ini React
+    // conditional render, bukan CSS "hidden print:block".
+    return (
+      <PrintReportContent
+        settings={settings}
+        stats={stats}
+        groups={groups}
+        areas={areas}
+        reportInfo={reportInfo}
+        heatmapImages={printHeatmaps}
+        frontViewImage={printFrontView}
+        presets={presets}
+      />
+    );
+  }
+
   return (
     <>
       {!activeProject && (
@@ -375,11 +421,10 @@ function App() {
               luar area yang terlihat — bukan hilang, hanya ter-clip oleh
               overflow-hidden pada .app-shell. Inilah sebabnya menyembunyikan
               panel kiri "memunculkan" panel kanan lagi: ruang jadi cukup. */}
-          {/* Laporan cetak sekarang komponen tersendiri (PrintReport, dirender
-              di luar layout interaktif ini) — <main> di layar TIDAK ikut
-              tercetak lagi (print-hide, bukan print:block seperti dulu),
-              supaya hasil Export PDF tidak lagi sekadar "apa yang kebetulan
-              tampil di layar" tapi laporan terstruktur yang sama setiap kali. */}
+          {/* Laporan cetak sekarang diganti total lewat conditional render
+              React (lihat isPrinting) saat window.print() sungguh dipanggil,
+              bukan CSS print:block — jadi kelas print-hide di sini sekadar
+              jaring pengaman, bukan mekanisme utamanya lagi. */}
           <main className={`${activeTab === 'map' ? 'flex' : 'hidden'} lg:flex flex-1 flex-col min-h-0 min-w-0 print-hide`}>
             {/* Peta */}
             <div className="flex-1 relative min-h-0 flex m-0 lg:m-2 lg:rounded-lg lg:border border-line overflow-hidden">
@@ -496,17 +541,6 @@ function App() {
           ))}
         </nav>
       </div>
-
-      <PrintReport
-        settings={settings}
-        stats={stats}
-        groups={groups}
-        areas={areas}
-        reportInfo={reportInfo}
-        heatmapImages={printHeatmaps}
-        frontViewImage={printFrontView}
-        presets={presets}
-      />
 
       {previewOpen && (
         <PrintPreviewModal

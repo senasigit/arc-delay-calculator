@@ -81,10 +81,13 @@ function Section({ n: num, title, children }: { n: number; title: string; childr
 }
 
 /**
- * Isi laporan saja, tanpa pembungkus hidden/print — dipakai DUA tempat:
- * disembunyikan sampai `window.print()` dipanggil (PrintReport di bawah),
- * DAN ditampilkan langsung di layar untuk preview (PrintPreviewModal.tsx).
- * Keduanya harus selalu identik, makanya kontennya satu sumber di sini.
+ * Isi laporan saja, dipakai DUA tempat: preview di layar (PrintPreviewModal)
+ * dan pengganti total UI aplikasi saat window.print() benar-benar dipanggil
+ * (lihat isPrinting di App.tsx). Keduanya render komponen yang sama persis,
+ * jadi preview dijamin sama dengan hasil cetak. Visibility-nya diatur lewat
+ * conditional render React (bukan CSS "hidden print:block") karena versi
+ * CSS itu terbukti gagal di Safari — laporan tetap blank walau sudah
+ * digenerate, diduga bug WebKit soal cascade layer Tailwind v4.
  */
 export function PrintReportContent({
   settings,
@@ -504,15 +507,6 @@ export function PrintReportContent({
       <div className="mt-6 pt-2 border-t border-gray-300 text-[9px] text-gray-400 text-center">
         Dibuat otomatis dengan Sub Forge — {generatedAt}
       </div>
-    </div>
-  );
-}
-
-/** Disembunyikan di layar, hanya muncul saat window.print() benar-benar dipanggil. */
-export function PrintReport(props: PrintReportProps) {
-  return (
-    <div className="hidden print:block">
-      <PrintReportContent {...props} />
     </div>
   );
 }
