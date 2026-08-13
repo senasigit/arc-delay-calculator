@@ -97,6 +97,22 @@ function App() {
     };
   }, []);
 
+  // Terbukti di Safari nyata: beforeprint TETAP terlambat — halaman masih
+  // kosong ("Page 1 of 1") walau listener di atas sudah flushSync. Dugaan:
+  // Safari mengambil snapshot halaman untuk dicetak SAAT window.print()
+  // dipanggil, sebelum beforeprint sempat berguna mengubah apa pun (bug
+  // WebKit lama). Jadi jangan andalkan event itu sama sekali untuk jalur
+  // tombol kita sendiri — set isPrinting SEBELUM window.print() dipanggil,
+  // di handler klik yang sama (tetap dianggap gesture pengguna asli, bukan
+  // dari setTimeout), supaya DOM sudah dalam kondisi final SEBELUM Safari
+  // sempat mengambil snapshot apa pun. Listener beforeprint/afterprint di
+  // atas tetap dipertahankan sebagai jaring pengaman untuk jalur lain
+  // (mis. pengguna menekan Cmd+P langsung, bukan lewat tombol ini).
+  const handlePrintNow = () => {
+    flushSync(() => setIsPrinting(true));
+    window.print();
+  };
+
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipFirstSaveRef = useRef(true);
 
@@ -553,11 +569,7 @@ function App() {
           frontViewImage={printFrontView}
           presets={presets}
           onClose={() => setPreviewOpen(false)}
-          // Delay kecil sebelum window.print() — jaga-jaga terhadap browser
-          // yang mengambil snapshot cetak sebelum frame terakhir sungguh
-          // ter-paint (dites benar di Chrome/headless; sengaja tetap dijaga
-          // untuk browser lain yang mungkin lebih ketat soal timing ini).
-          onPrint={() => setTimeout(() => window.print(), 80)}
+          onPrint={handlePrintNow}
         />
       )}
     </>
