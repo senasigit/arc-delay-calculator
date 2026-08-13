@@ -790,11 +790,13 @@ export function Visualizer({
       // Jarak antar baris (End-Fire, Gradient In-Line, dsb.) — garis vertikal
       // di sisi kiri kolom, hanya muncul kalau setup ini punya lebih dari
       // satu baris (findRowSpacingPair mengembalikan null kalau tidak).
-      const rowPair = findRowSpacingPair(groups);
+      // Muka-ke-muka (celah udara sesungguhnya), konsisten dengan Sub Gap —
+      // BUKAN pusat-ke-pusat seperti nilai settings.rowSpacing mentah.
+      const rowPair = findRowSpacingPair(groups, dimensionY);
       if (rowPair) {
         const rx = rowPair.groupX * scale - rectW / 2 - 20;
-        const ry0 = rowPair.yFront * scale;
-        const ry1 = rowPair.yRear * scale;
+        const ry0 = rowPair.yNear * scale;
+        const ry1 = rowPair.yFar * scale;
         drawVerticalDimensionLine(
           ctx, rx, ry0, ry1,
           `Jarak Baris ${formatMeters(rowPair.spacing, 3)}`,

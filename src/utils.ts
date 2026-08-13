@@ -201,9 +201,11 @@ export function drawVerticalDimensionLine(
 export interface RowSpacingPair {
   /** Posisi X kolom yang dipakai sebagai acuan menggambar (m, koordinat array). */
   groupX: number;
-  yFront: number;
-  yRear: number;
-  /** Jarak fisik sesungguhnya antar baris (m) — selalu positif. */
+  /** Tepi belakang box baris depan (muka yang menghadap baris berikutnya). */
+  yNear: number;
+  /** Tepi depan box baris belakang. */
+  yFar: number;
+  /** Celah udara muka-ke-muka sesungguhnya antar baris (m) — BUKAN pusat-ke-pusat. */
   spacing: number;
 }
 
@@ -212,8 +214,14 @@ export interface RowSpacingPair {
  * lebih dari satu baris — dipakai untuk anotasi "Jarak antar baris" di Denah
  * dan gambar peta laporan PDF. Semua posisi berbagi jarak antar baris yang
  * sama, jadi satu kolom representatif sudah cukup.
+ *
+ * Setting "Jarak antar baris" sendiri disimpan pusat-ke-pusat (lihat
+ * calculateArcDelay), tapi garis ukurnya menampilkan celah muka-ke-muka —
+ * konsisten dengan Sub Gap yang juga celah fisik, bukan jarak pusat. Karena
+ * itu perlu dimensionY (kedalaman box) untuk mengurangi setengah badan box
+ * di tiap sisi.
  */
-export function findRowSpacingPair(groups: BoxGroup[]): RowSpacingPair | null {
+export function findRowSpacingPair(groups: BoxGroup[], dimensionY: number): RowSpacingPair | null {
   for (const g of groups) {
     const rowYs = new Map<number, number>();
     for (const b of g.boxes) {
@@ -221,9 +229,11 @@ export function findRowSpacingPair(groups: BoxGroup[]): RowSpacingPair | null {
     }
     if (rowYs.size >= 2) {
       const sorted = [...rowYs.entries()].sort((a, b) => a[0] - b[0]);
-      const yFront = sorted[0][1];
-      const yRear = sorted[1][1];
-      return { groupX: g.x, yFront, yRear, spacing: Math.abs(yRear - yFront) };
+      const y0 = sorted[0][1];
+      const y1 = sorted[1][1];
+      const yNear = Math.min(y0, y1) + dimensionY / 2;
+      const yFar = Math.max(y0, y1) - dimensionY / 2;
+      return { groupX: g.x, yNear, yFar, spacing: yFar - yNear };
     }
   }
   return null;

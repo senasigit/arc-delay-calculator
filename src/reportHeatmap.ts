@@ -241,11 +241,11 @@ export function generateReportHeatmapImage(
       drawGapDimensionLine(ctx, x0, x1, y, `Central Gap ${formatMeters(trueGap, 3)}`, col.dimensionLineAccent, '#ffffff', -angleRad);
     }
 
-    const rowPair = findRowSpacingPair(groups);
+    const rowPair = findRowSpacingPair(groups, dimensionY);
     if (rowPair) {
       const rx = rowPair.groupX * scale - rectW / 2 - 20;
-      const ry0 = rowPair.yFront * scale;
-      const ry1 = rowPair.yRear * scale;
+      const ry0 = rowPair.yNear * scale;
+      const ry1 = rowPair.yFar * scale;
       drawVerticalDimensionLine(
         ctx, rx, ry0, ry1,
         `Jarak Baris ${formatMeters(rowPair.spacing, 3)}`,
