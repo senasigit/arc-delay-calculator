@@ -144,6 +144,91 @@ export function drawGapDimensionLine(
   ctx.restore();
 }
 
+/** Versi vertikal drawGapDimensionLine — untuk jarak antar BARIS (sumbu Y/kedalaman), bukan antar posisi (sumbu X). */
+export function drawVerticalDimensionLine(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y0: number,
+  y1: number,
+  label: string,
+  color: string,
+  haloColor: string,
+  textRotation = 0
+): void {
+  if (Math.abs(y1 - y0) < 4) return;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.25;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x, y0);
+  ctx.lineTo(x, y1);
+  ctx.stroke();
+
+  const tick = 4;
+  ctx.beginPath();
+  ctx.moveTo(x - tick, y0);
+  ctx.lineTo(x + tick, y0);
+  ctx.moveTo(x - tick, y1);
+  ctx.lineTo(x + tick, y1);
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ([[y0, 1], [y1, -1]] as const).forEach(([y, dir]) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 3, y + dir * 6);
+    ctx.lineTo(x + 3, y + dir * 6);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  ctx.save();
+  ctx.translate(x, (y0 + y1) / 2);
+  ctx.rotate(textRotation);
+  ctx.font = '700 9px ui-sans-serif, -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = haloColor;
+  ctx.strokeText(label, 8, 0);
+  ctx.fillStyle = color;
+  ctx.fillText(label, 8, 0);
+  ctx.restore();
+}
+
+export interface RowSpacingPair {
+  /** Posisi X kolom yang dipakai sebagai acuan menggambar (m, koordinat array). */
+  groupX: number;
+  yFront: number;
+  yRear: number;
+  /** Jarak fisik sesungguhnya antar baris (m) — selalu positif. */
+  spacing: number;
+}
+
+/**
+ * Cari dua baris bersebelahan (row 0 & row 1) pada posisi pertama yang punya
+ * lebih dari satu baris — dipakai untuk anotasi "Jarak antar baris" di Denah
+ * dan gambar peta laporan PDF. Semua posisi berbagi jarak antar baris yang
+ * sama, jadi satu kolom representatif sudah cukup.
+ */
+export function findRowSpacingPair(groups: BoxGroup[]): RowSpacingPair | null {
+  for (const g of groups) {
+    const rowYs = new Map<number, number>();
+    for (const b of g.boxes) {
+      if (!rowYs.has(b.rowIndex)) rowYs.set(b.rowIndex, b.y);
+    }
+    if (rowYs.size >= 2) {
+      const sorted = [...rowYs.entries()].sort((a, b) => a[0] - b[0]);
+      const yFront = sorted[0][1];
+      const yRear = sorted[1][1];
+      return { groupX: g.x, yFront, yRear, spacing: Math.abs(yRear - yFront) };
+    }
+  }
+  return null;
+}
+
 /**
  * Perbaiki otomatis project lama yang gap/central gap/row spacing-nya sudah
  * terlanjur tersimpan dengan nilai tidak wajar (dari sebelum MIN_TARGET_FREQ_HZ

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SubwooferSettings, BoxGroup, VenueArea } from '../types';
-import { calculate2DSpatialHeatmap, renderHeatmapToImageData, formatMeters, calculateFrequencyResponse, SPL_RAMP_CSS, SANE_LENGTH_M, facingAngle, findGapPairs, drawGapDimensionLine } from '../utils';
+import { calculate2DSpatialHeatmap, renderHeatmapToImageData, formatMeters, calculateFrequencyResponse, SPL_RAMP_CSS, SANE_LENGTH_M, facingAngle, findGapPairs, drawGapDimensionLine, findRowSpacingPair, drawVerticalDimensionLine } from '../utils';
 import { ResponseChart } from './ResponseChart';
 import { canvasColors, type ResolvedTheme } from '../theme';
 
@@ -437,7 +437,7 @@ export function Visualizer({
           const x0 = fOriginX + a.x * fScale + wFOuter / 2;
           const x1 = fOriginX + b.x * fScale - wFOuter / 2;
           const trueGap = b.x - a.x - dimensionX;
-          drawGapDimensionLine(ctx, x0, x1, dimY, `Sub Gap ${formatMeters(trueGap, 3)}`, col.axis, haloColorF);
+          drawGapDimensionLine(ctx, x0, x1, dimY, `Sub Gap ${formatMeters(trueGap, 3)}`, col.dimensionLine, haloColorF);
         }
 
         if (isEvenArray) {
@@ -446,7 +446,7 @@ export function Visualizer({
           const x0 = fOriginX + a.x * fScale;
           const x1 = fOriginX + b.x * fScale;
           const trueGap = b.x - a.x;
-          drawGapDimensionLine(ctx, x0, x1, dimY - 16, `Central Gap ${formatMeters(trueGap, 3)}`, col.baffle, haloColorF);
+          drawGapDimensionLine(ctx, x0, x1, dimY - 16, `Central Gap ${formatMeters(trueGap, 3)}`, col.dimensionLineAccent, haloColorF);
         }
       }
 
@@ -774,7 +774,7 @@ export function Visualizer({
         const x1 = b.x * scale - rectW / 2;
         const y = Math.max(a.y, b.y) * scale + rectH / 2 + 16;
         const trueGap = b.x - a.x - dimensionX;
-        drawGapDimensionLine(ctx, x0, x1, y, `Sub Gap ${formatMeters(trueGap, 3)}`, col.axis, haloColor, -angleRad);
+        drawGapDimensionLine(ctx, x0, x1, y, `Sub Gap ${formatMeters(trueGap, 3)}`, col.dimensionLine, haloColor, -angleRad);
       }
 
       if (isEvenArray) {
@@ -784,7 +784,22 @@ export function Visualizer({
         const x1 = b.x * scale;
         const y = Math.max(a.y, b.y) * scale + rectH / 2 + 34;
         const trueGap = b.x - a.x;
-        drawGapDimensionLine(ctx, x0, x1, y, `Central Gap ${formatMeters(trueGap, 3)}`, col.baffle, haloColor, -angleRad);
+        drawGapDimensionLine(ctx, x0, x1, y, `Central Gap ${formatMeters(trueGap, 3)}`, col.dimensionLineAccent, haloColor, -angleRad);
+      }
+
+      // Jarak antar baris (End-Fire, Gradient In-Line, dsb.) — garis vertikal
+      // di sisi kiri kolom, hanya muncul kalau setup ini punya lebih dari
+      // satu baris (findRowSpacingPair mengembalikan null kalau tidak).
+      const rowPair = findRowSpacingPair(groups);
+      if (rowPair) {
+        const rx = rowPair.groupX * scale - rectW / 2 - 20;
+        const ry0 = rowPair.yFront * scale;
+        const ry1 = rowPair.yRear * scale;
+        drawVerticalDimensionLine(
+          ctx, rx, ry0, ry1,
+          `Jarak Baris ${formatMeters(rowPair.spacing, 3)}`,
+          col.dimensionLine, haloColor, -angleRad
+        );
       }
     }
 

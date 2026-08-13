@@ -76,6 +76,8 @@ export interface CanvasColors {
   baffle: string;
   baffleReversed: string;
   muteCross: string;
+  dimensionLine: string;
+  dimensionLineAccent: string;
 }
 
 export function canvasColors(theme: ResolvedTheme): CanvasColors {
@@ -103,5 +105,11 @@ export function canvasColors(theme: ResolvedTheme): CanvasColors {
     baffle: dark ? '#5598e7' : '#7db4f0',
     baffleReversed: dark ? '#c98500' : '#e0a53a',
     muteCross: dark ? '#e66767' : '#c93b3b',
+    // Label garis ukur Sub Gap/Central Gap — TEKS, bukan garis dekoratif,
+    // jadi tidak boleh pakai `axis` (sengaja dibuat sangat transparan untuk
+    // garis sumbu tipis). Dipakai col.axis sebelumnya membuat tulisan "Sub
+    // Gap" nyaris tak terlihat di peta mode gelap.
+    dimensionLine: dark ? '#9aa5b1' : '#4b5563',
+    dimensionLineAccent: dark ? '#5598e7' : '#2a78d6',
   };
 }

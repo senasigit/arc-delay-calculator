@@ -1,5 +1,5 @@
 import type { SubwooferSettings, BoxGroup, VenueArea } from './types';
-import { calculate2DSpatialHeatmap, renderHeatmapToImageData, SANE_LENGTH_M, facingAngle, findGapPairs, drawGapDimensionLine, formatMeters } from './utils';
+import { calculate2DSpatialHeatmap, renderHeatmapToImageData, SANE_LENGTH_M, facingAngle, findGapPairs, drawGapDimensionLine, findRowSpacingPair, drawVerticalDimensionLine, formatMeters } from './utils';
 import { canvasColors } from './theme';
 
 /**
@@ -228,7 +228,7 @@ export function generateReportHeatmapImage(
       const x1 = b.x * scale - rectW / 2;
       const y = Math.max(a.y, b.y) * scale + rectH / 2 + 16;
       const trueGap = b.x - a.x - dimensionX;
-      drawGapDimensionLine(ctx, x0, x1, y, `Sub Gap ${formatMeters(trueGap, 3)}`, col.axis, '#ffffff', -angleRad);
+      drawGapDimensionLine(ctx, x0, x1, y, `Sub Gap ${formatMeters(trueGap, 3)}`, col.dimensionLine, '#ffffff', -angleRad);
     }
 
     if (isEvenArray) {
@@ -238,7 +238,19 @@ export function generateReportHeatmapImage(
       const x1 = b.x * scale;
       const y = Math.max(a.y, b.y) * scale + rectH / 2 + 34;
       const trueGap = b.x - a.x;
-      drawGapDimensionLine(ctx, x0, x1, y, `Central Gap ${formatMeters(trueGap, 3)}`, col.baffle, '#ffffff', -angleRad);
+      drawGapDimensionLine(ctx, x0, x1, y, `Central Gap ${formatMeters(trueGap, 3)}`, col.dimensionLineAccent, '#ffffff', -angleRad);
+    }
+
+    const rowPair = findRowSpacingPair(groups);
+    if (rowPair) {
+      const rx = rowPair.groupX * scale - rectW / 2 - 20;
+      const ry0 = rowPair.yFront * scale;
+      const ry1 = rowPair.yRear * scale;
+      drawVerticalDimensionLine(
+        ctx, rx, ry0, ry1,
+        `Jarak Baris ${formatMeters(rowPair.spacing, 3)}`,
+        col.dimensionLine, '#ffffff', -angleRad
+      );
     }
   }
 
