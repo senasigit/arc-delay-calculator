@@ -144,7 +144,7 @@ export function PrintReportContent({
   const generatedAt = `${now.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })} · ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
 
   return (
-    <div className="text-gray-900" style={{ fontFamily: 'Arial, sans-serif' }}>
+    <div className="bg-white text-gray-900" style={{ fontFamily: 'Arial, sans-serif' }}>
       {/* ---------------- Sampul / kop laporan ---------------- */}
       <div className="mb-6 pb-4 border-b-4 border-gray-800">
         <p className="text-[10px] uppercase tracking-widest text-gray-500 mb-1">Laporan Konfigurasi Subwoofer Array</p>

@@ -271,18 +271,34 @@ function App() {
   if (isPrinting) {
     // Diganti total dengan konten laporan polos saat sungguh mencetak —
     // lihat catatan di deklarasi isPrinting soal kenapa ini React
-    // conditional render, bukan CSS "hidden print:block".
+    // conditional render, bukan CSS "hidden print:block". min-h-screen +
+    // bg-white WAJIB di sini: tanpa ini, latar belakang mengikuti <body>
+    // (yang tetap dark kalau tema aplikasi gelap, karena swap ini tidak
+    // lewat @media print sama sekali) — teks gelap di atas latar gelap jadi
+    // nyaris tak terbaca, persis bug yang terlihat di Safari.
     return (
-      <PrintReportContent
-        settings={settings}
-        stats={stats}
-        groups={groups}
-        areas={areas}
-        reportInfo={reportInfo}
-        heatmapImages={printHeatmaps}
-        frontViewImage={printFrontView}
-        presets={presets}
-      />
+      <div className="min-h-screen bg-white p-6">
+        {/* Jaring pengaman: kalau window.print() di suatu browser tidak
+            sungguh membuka dialog cetak (afterprint jadi tak pernah
+            terpicu), tanpa tombol ini pengguna terjebak permanen di
+            tampilan laporan tanpa jalan kembali ke aplikasi. */}
+        <button
+          className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs font-semibold shadow-lg print-hide"
+          onClick={() => setIsPrinting(false)}
+        >
+          ← Kembali ke aplikasi
+        </button>
+        <PrintReportContent
+          settings={settings}
+          stats={stats}
+          groups={groups}
+          areas={areas}
+          reportInfo={reportInfo}
+          heatmapImages={printHeatmaps}
+          frontViewImage={printFrontView}
+          presets={presets}
+        />
+      </div>
     );
   }
 
