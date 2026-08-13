@@ -110,11 +110,39 @@ export function generateFrontViewImage(settings: SubwooferSettings, groups: BoxG
       ctx.fillRect(rx, ry, wF, Math.max(2, Math.min(4, hF * 0.12)));
 
       if (hF >= 16 && wF >= 22) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '700 10px Arial, sans-serif';
+        // Sama seperti mode Depan interaktif: isi box selalu gelap, jadi
+        // teks dipakai warna terang tetap + halo gelap, bukan warna abu-abu
+        // yang nyaris tak terbaca. Box yang dibalik fisik (reversed) dapat
+        // tag "REVERSED" tambahan kalau ruangnya cukup (diukur dari lebar
+        // teks sesungguhnya, bukan tebakan px), jatuh ke "REV" lalu ke
+        // sekadar warna+strip saja bila box makin kecil.
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`S${box.stackLevel + 1}`, cx, cy);
+        ctx.lineJoin = 'round';
+        const drawTag = (text: string, x: number, y: number) => {
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+          ctx.strokeText(text, x, y);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(text, x, y);
+        };
+
+        ctx.font = '700 8px Arial, sans-serif';
+        const revWidth = ctx.measureText('REVERSED').width;
+        const canFitBoth = box.reversed && hF >= 24 && wF >= revWidth + 8;
+
+        if (canFitBoth) {
+          ctx.font = '700 9px Arial, sans-serif';
+          drawTag(`S${box.stackLevel + 1}`, cx, cy - hF * 0.2);
+          ctx.font = '700 8px Arial, sans-serif';
+          drawTag('REVERSED', cx, cy + hF * 0.24);
+        } else if (box.reversed && wF >= ctx.measureText('REV').width + 6) {
+          drawTag('REV', cx, cy);
+        } else {
+          ctx.font = '700 9px Arial, sans-serif';
+          drawTag(`S${box.stackLevel + 1}`, cx, cy);
+        }
+        ctx.lineWidth = 1;
       }
     });
 
