@@ -17,7 +17,7 @@ import { calculateSpeedOfSound, sanitizeSettings } from './utils';
 import type { SubwooferSettings, ReportInfo, ProjectData, VenueArea, SubwooferPreset } from './types';
 import { DEFAULT_SETTINGS, normalizeSettings } from './types';
 import { calculateArcDelay } from './utils';
-import { generateAllReportHeatmaps, type ReportHeatmapImage } from './reportHeatmap';
+import { REPORT_HEATMAP_SPECS, generateReportHeatmapImage, type ReportHeatmapImage } from './reportHeatmap';
 import { generateFrontViewImage } from './reportFrontView';
 import { db } from './firebase';
 import { doc, updateDoc, collection, onSnapshot } from 'firebase/firestore';
@@ -63,6 +63,7 @@ function App() {
   const [printHeatmaps, setPrintHeatmaps] = useState<ReportHeatmapImage[] | null>(null);
   const [printFrontView, setPrintFrontView] = useState<string | null>(null);
   const [preparingReport, setPreparingReport] = useState(false);
+  const [preparingProgress, setPreparingProgress] = useState<{ done: number; total: number } | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   // Preset box tersimpan di collection Firestore terpisah dari project — dibaca
   // di sini juga (bukan cuma di Sidebar) supaya laporan PDF bisa menampilkan
@@ -240,20 +241,37 @@ function App() {
   );
 
   // Membuat 10 peta SPL statis (per frekuensi) itu berat — dijalankan hanya
-  // saat tombol Export PDF ditekan, bukan tiap render. requestAnimationFrame
-  // memberi satu frame agar label tombol "Menyiapkan…" sempat tergambar
-  // sebelum kerja sinkron yang berat dimulai. Setelah siap, tampilkan preview
+  // saat tombol Export PDF ditekan, bukan tiap render. Dibuat SATU PER SATU
+  // (bukan sekali batch) dengan jeda requestAnimationFrame di antaranya,
+  // supaya (a) label tombol bisa menunjukkan progres asli — sebelumnya cuma
+  // "Menyiapkan…" statis yang terasa macet padahal sedang bekerja — dan
+  // (b) browser sempat bernapas antar gambar alih-alih membekukan tab
+  // selama beberapa detik penuh sekaligus. Setelah siap, tampilkan preview
   // dulu — jangan langsung window.print() — supaya pengguna bisa memeriksa
   // isinya dan membatalkan kalau ada yang belum sesuai.
-  const handleExportPdf = () => {
+  const yieldToBrowser = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  const handleExportPdf = async () => {
     setPreparingReport(true);
-    requestAnimationFrame(() => {
-      const images = generateAllReportHeatmaps(settings, groups, areas);
-      setPrintHeatmaps(images);
-      setPrintFrontView(generateFrontViewImage(settings, groups));
-      setPreparingReport(false);
-      setPreviewOpen(true);
-    });
+    const total = REPORT_HEATMAP_SPECS.length + 1; // +1 untuk gambar tampak depan
+    setPreparingProgress({ done: 0, total });
+    await yieldToBrowser();
+
+    const images: ReportHeatmapImage[] = [];
+    for (const spec of REPORT_HEATMAP_SPECS) {
+      images.push(generateReportHeatmapImage(settings, groups, areas, spec));
+      setPreparingProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+      await yieldToBrowser();
+    }
+    setPrintHeatmaps(images);
+
+    setPrintFrontView(generateFrontViewImage(settings, groups));
+    setPreparingProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+    await yieldToBrowser();
+
+    setPreparingReport(false);
+    setPreparingProgress(null);
+    setPreviewOpen(true);
   };
 
   const openTab = (tab: Tab) => {
@@ -361,7 +379,11 @@ function App() {
             {saveLabel[saveState]}
           </span>
 
-          <div className="ml-auto flex items-center gap-1.5">
+          {/* overflow-x-auto = jaring pengaman: kalau toolbar tetap lebih
+              lebar dari layar (HP sangat sempit), tombolnya bisa digeser
+              alih-alih ada yang ter-clip tak terjangkau di luar layar sama
+              sekali (bug nyata sebelumnya — select tema kepotong di iPhone). */}
+          <div className="ml-auto flex items-center gap-1.5 overflow-x-auto">
             <button
               className="btn hidden lg:inline-flex"
               onClick={() => setShowUtility(true)}
@@ -373,12 +395,26 @@ function App() {
               Asisten
             </button>
             <button
-              className="btn hidden sm:inline-flex"
+              className="btn"
               onClick={handleExportPdf}
               disabled={preparingReport}
               title="Buat laporan PDF lengkap (konfigurasi, DSP, dan peta SPL tiap frekuensi) — tampilkan preview dulu sebelum dicetak"
             >
-              {preparingReport ? 'Menyiapkan…' : 'Export PDF'}
+              {preparingReport ? (
+                <>
+                  <span className="sm:hidden">
+                    {preparingProgress ? `${preparingProgress.done}/${preparingProgress.total}` : '…'}
+                  </span>
+                  <span className="hidden sm:inline">
+                    Menyiapkan… {preparingProgress ? `${preparingProgress.done}/${preparingProgress.total}` : ''}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="sm:hidden">PDF</span>
+                  <span className="hidden sm:inline">Export PDF</span>
+                </>
+              )}
             </button>
             <button className="btn" onClick={() => setActiveProject(null)} title="Buka project lain">
               Project
@@ -408,7 +444,7 @@ function App() {
               aria-label="Tema tampilan"
               title="Tema tampilan"
             >
-              <option value="system">Ikuti sistem</option>
+              <option value="system">Sistem</option>
               <option value="light">Terang</option>
               <option value="dark">Gelap</option>
             </select>

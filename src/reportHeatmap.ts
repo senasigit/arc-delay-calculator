@@ -112,6 +112,13 @@ export function generateReportHeatmapImage(
     showHeatmap: true,
     frequency: freq,
     bandwidth: spec.bandwidth,
+    // Gambar laporan ini statis 640×420 px, ditampilkan berdampingan 2 kolom
+    // di kertas — tidak butuh presisi "Tinggi" (blockSize 2px) yang dipakai
+    // peta interaktif saat di-zoom jauh. Dikunci ke "Sedang" di SINI SAJA
+    // (bukan settings asli) supaya Export PDF tetap cepat dibuat 10 kali
+    // berturut-turut walau pengguna sedang memilih Resolusi Tinggi di panel
+    // Heatmap untuk tampilan layarnya.
+    resolution: 'Medium',
   };
 
   const { scale, ccx, ccy } = computeFit(groups, areas, dimensionX, dimensionY);
